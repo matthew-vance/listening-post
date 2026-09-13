@@ -1,7 +1,26 @@
 name: listening-post
 
 services:
+  traefik:
+    image: traefik:v3.7
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   gateway:
     build: ./gateway
-    ports:
-      - "8080:8080"
+    restart: unless-stopped
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.gateway.rule: PathPrefix(`/v1`)
+      traefik.http.routers.gateway.entrypoints: web
+      traefik.http.services.gateway.loadbalancer.server.port: "8080"
+      traefik.http.services.gateway.loadbalancer.healthcheck.path: /readyz
+      traefik.http.services.gateway.loadbalancer.healthcheck.port: "9091"
+      traefik.http.services.gateway.loadbalancer.healthcheck.interval: 10s
