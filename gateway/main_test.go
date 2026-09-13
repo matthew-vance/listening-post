@@ -14,7 +14,7 @@ import (
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewServer(&readiness{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	NewAdminServer(&readiness{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -45,7 +45,7 @@ func TestReadyz(t *testing.T) {
 			r.shuttingDown.Store(tt.shuttingDown)
 
 			rec := httptest.NewRecorder()
-			NewServer(r).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			NewAdminServer(r).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -57,11 +57,23 @@ func TestReadyz(t *testing.T) {
 	}
 }
 
+func TestEventsPost(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewServer().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/events", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
 func TestRun(t *testing.T) {
-	port := freePort(t)
+	publicPort, adminPort := freePort(t), freePort(t)
 	getenv := func(key string) string {
-		if key == "PORT" {
-			return port
+		switch key {
+		case "PORT":
+			return publicPort
+		case "ADMIN_PORT":
+			return adminPort
 		}
 		return ""
 	}
@@ -72,8 +84,16 @@ func TestRun(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, getenv, io.Discard) }()
 
-	if err := waitForReady(ctx, 2*time.Second, "http://localhost:"+port+"/readyz"); err != nil {
+	if err := waitForReady(ctx, 2*time.Second, "http://localhost:"+adminPort+"/readyz"); err != nil {
 		t.Fatal(err)
+	}
+
+	public := "http://localhost:" + publicPort
+	if got := statusOf(t, http.MethodPost, public+"/v1/events"); got != http.StatusOK {
+		t.Fatalf("POST /v1/events on public port: status = %d, want %d", got, http.StatusOK)
+	}
+	if got := statusOf(t, http.MethodGet, public+"/healthz"); got != http.StatusNotFound {
+		t.Fatalf("GET /healthz on public port: status = %d, want %d", got, http.StatusNotFound)
 	}
 
 	cancel()
@@ -85,6 +105,20 @@ func TestRun(t *testing.T) {
 	case <-time.After(6 * time.Second):
 		t.Fatal("run did not return after cancel")
 	}
+}
+
+func statusOf(t *testing.T, method, url string) int {
+	t.Helper()
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
 }
 
 func freePort(t *testing.T) string {

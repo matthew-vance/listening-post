@@ -21,27 +21,38 @@ func main() {
 	}
 }
 
+// run starts the gateway and blocks until ctx is cancelled or SIGINT/SIGTERM.
+//
+// Environment:
+//
+//	PORT        public API listener (default 8080)
+//	ADMIN_PORT  health/readiness listener, internal only (default 9091)
 func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	logger := log.New(stderr, "", log.LstdFlags)
 
-	// ponytail: PORT is the only config; add a config struct when a second value shows up.
-	port := getenv("PORT")
-	if port == "" {
-		port = "8080"
+	// ponytail: two env vars; add a config struct when there's a third.
+	envOr := func(key, def string) string {
+		if v := getenv(key); v != "" {
+			return v
+		}
+		return def
 	}
 
 	r := &readiness{}
-	srv := &http.Server{Addr: ":" + port, Handler: NewServer(r)}
+	public := &http.Server{Addr: ":" + envOr("PORT", "8080"), Handler: NewServer()}
+	admin := &http.Server{Addr: ":" + envOr("ADMIN_PORT", "9091"), Handler: NewAdminServer(r)}
 
-	go func() {
-		logger.Printf("listening on %s", srv.Addr)
-		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			logger.Printf("error listening and serving: %s", err)
-		}
-	}()
+	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {
+		go func() {
+			logger.Printf("%s listening on %s", name, srv.Addr)
+			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				logger.Printf("%s: error listening and serving: %s", name, err)
+			}
+		}()
+	}
 	// ponytail: nothing to wait on yet; flip this after downstream deps connect.
 	r.ready.Store(true)
 
@@ -51,8 +62,16 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown http server: %w", err)
+	// Drain public first so /readyz reports 503 to probes for the whole drain window.
+	return errors.Join(
+		wrapErr("shutdown public server", public.Shutdown(shutdownCtx)),
+		wrapErr("shutdown admin server", admin.Shutdown(shutdownCtx)),
+	)
+}
+
+func wrapErr(msg string, err error) error {
+	if err != nil {
+		return fmt.Errorf("%s: %w", msg, err)
 	}
 	return nil
 }

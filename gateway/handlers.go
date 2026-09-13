@@ -6,6 +6,13 @@ import (
 	"net/http"
 )
 
+func handleEventsPost() http.Handler {
+	// ponytail: stub; decode[T] the payload here once the event schema is defined.
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
 func handleHealthz() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		encode(w, http.StatusOK, map[string]string{"status": "ok"})
