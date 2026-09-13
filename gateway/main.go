@@ -2,61 +2,44 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
 
-type readiness struct {
-	ready, shuttingDown atomic.Bool
-}
-
-func (r *readiness) serveReadyz(w http.ResponseWriter, _ *http.Request) {
-	if r.ready.Load() && !r.shuttingDown.Load() {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-		return
-	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(v)
-}
-
-func newMux(r *readiness) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	mux.HandleFunc("GET /readyz", r.serveReadyz)
-	return mux
-}
-
 func main() {
+	ctx := context.Background()
+	if err := run(ctx, os.Getenv, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	logger := log.New(stderr, "", log.LstdFlags)
+
 	// ponytail: PORT is the only config; add a config struct when a second value shows up.
-	port := os.Getenv("PORT")
+	port := getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
 	r := &readiness{}
-	srv := &http.Server{Addr: ":" + port, Handler: newMux(r)}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	srv := &http.Server{Addr: ":" + port, Handler: NewServer(r)}
 
 	go func() {
-		log.Printf("listening on :%s", port)
+		logger.Printf("listening on %s", srv.Addr)
 		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			logger.Printf("error listening and serving: %s", err)
 		}
 	}()
 	// ponytail: nothing to wait on yet; flip this after downstream deps connect.
@@ -64,11 +47,12 @@ func main() {
 
 	<-ctx.Done()
 	r.shuttingDown.Store(true)
-	log.Print("shutting down")
+	logger.Print("shutting down")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal(err)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown http server: %w", err)
 	}
+	return nil
 }

@@ -1,14 +1,20 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 )
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newMux(&readiness{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	NewServer(&readiness{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -39,7 +45,7 @@ func TestReadyz(t *testing.T) {
 			r.shuttingDown.Store(tt.shuttingDown)
 
 			rec := httptest.NewRecorder()
-			newMux(r).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			NewServer(r).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -48,5 +54,71 @@ func TestReadyz(t *testing.T) {
 				t.Fatalf("body = %q, want %q", rec.Body.String(), tt.wantBody)
 			}
 		})
+	}
+}
+
+func TestRun(t *testing.T) {
+	port := freePort(t)
+	getenv := func(key string) string {
+		if key == "PORT" {
+			return port
+		}
+		return ""
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, getenv, io.Discard) }()
+
+	if err := waitForReady(ctx, 2*time.Second, "http://localhost:"+port+"/readyz"); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run returned %v, want nil", err)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("run did not return after cancel")
+	}
+}
+
+func freePort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+}
+
+func waitForReady(ctx context.Context, timeout time.Duration, endpoint string) error {
+	start := time.Now()
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			if time.Since(start) >= timeout {
+				return fmt.Errorf("timeout waiting for %s", endpoint)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	}
 }
