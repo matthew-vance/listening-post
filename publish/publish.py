@@ -70,7 +70,7 @@ def main() -> None:
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    url = os.environ.get("GATEWAY_URL", "http://localhost:8080").rstrip("/")
+    url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
     station = os.environ.get("STATION_ID", socket.gethostname())
     batch_size = int(os.environ.get("BATCH_SIZE", "500"))
     poll = float(os.environ.get("POLL_SECONDS", "2"))
