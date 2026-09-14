@@ -127,7 +127,8 @@ func TestMigrationsAreIdempotentAndReversible(t *testing.T) {
 }
 
 func TestHeartbeatStoreSave(t *testing.T) {
-	pool := testPool(t)
+	stations, _ := testStations(t)
+	pool := stations.pool
 	store := &heartbeatStore{pool: pool}
 	ctx := t.Context()
 
@@ -164,6 +165,10 @@ func TestHeartbeatStoreSave(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("rows = %d, want 1 (re-send must be ignored)", count)
+	}
+
+	if err := store.Save(ctx, "ghost", received, hb); err == nil {
+		t.Fatal("save for unregistered station: want FK error")
 	}
 	if !gotReceived.Equal(received) || !gotLastEvt.Equal(reported) || gotOldest != nil || gotRate == nil || *gotRate != rate || gotDepth != 7 {
 		t.Fatalf("row = received %v lastEvt %v oldest %v rate %v depth %d", gotReceived, gotLastEvt, gotOldest, gotRate, gotDepth)
