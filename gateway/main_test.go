@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+const validEvents = `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42.468150+00:00","raw":"MSG,3,1,1,ABC123,1"}]}`
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
@@ -58,11 +62,40 @@ func TestReadyz(t *testing.T) {
 }
 
 func TestEventsPost(t *testing.T) {
-	rec := httptest.NewRecorder()
-	NewServer().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/events", nil))
+	tests := []struct {
+		name        string
+		body        string
+		wantCode    int
+		wantProblem string // key expected in the 422 problems map
+	}{
+		{"valid", validEvents, http.StatusOK, ""},
+		{"malformed json", `{"station":"dev","events":[`, http.StatusBadRequest, ""},
+		{"bad ts", `{"station":"dev","events":[{"id":1,"ts":"nope","raw":"x"}]}`, http.StatusBadRequest, ""},
+		{"empty station", `{"station":"","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"x"}]}`, http.StatusUnprocessableEntity, "station"},
+		{"empty events", `{"station":"dev","events":[]}`, http.StatusUnprocessableEntity, "events"},
+		{"empty raw", `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":""}]}`, http.StatusUnprocessableEntity, "events[0].raw"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			NewServer().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(tt.body)))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
+			}
+			if tt.wantProblem == "" {
+				return
+			}
+			var resp struct {
+				Problems map[string]string `json:"problems"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode body %q: %v", rec.Body.String(), err)
+			}
+			if _, ok := resp.Problems[tt.wantProblem]; !ok {
+				t.Fatalf("problems = %v, want key %q", resp.Problems, tt.wantProblem)
+			}
+		})
 	}
 }
 
@@ -89,10 +122,10 @@ func TestRun(t *testing.T) {
 	}
 
 	public := "http://localhost:" + publicPort
-	if got := statusOf(t, http.MethodPost, public+"/v1/events"); got != http.StatusOK {
+	if got := statusOf(t, http.MethodPost, public+"/v1/events", validEvents); got != http.StatusOK {
 		t.Fatalf("POST /v1/events on public port: status = %d, want %d", got, http.StatusOK)
 	}
-	if got := statusOf(t, http.MethodGet, public+"/healthz"); got != http.StatusNotFound {
+	if got := statusOf(t, http.MethodGet, public+"/healthz", ""); got != http.StatusNotFound {
 		t.Fatalf("GET /healthz on public port: status = %d, want %d", got, http.StatusNotFound)
 	}
 
@@ -107,9 +140,9 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func statusOf(t *testing.T, method, url string) int {
+func statusOf(t *testing.T, method, url, body string) int {
 	t.Helper()
-	req, err := http.NewRequest(method, url, nil)
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
