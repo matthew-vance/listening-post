@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable
+from typing import TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -22,6 +23,12 @@ CREATE TABLE IF NOT EXISTS events (
 log = logging.getLogger("publish")
 
 
+class Event(TypedDict):
+    id: int
+    ts: str
+    raw: str
+
+
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
@@ -30,9 +37,9 @@ def open_db(path: str) -> sqlite3.Connection:
     return db
 
 
-def next_batch(db: sqlite3.Connection, limit: int) -> list[dict]:
+def next_batch(db: sqlite3.Connection, limit: int) -> list[Event]:
     rows = db.execute("SELECT id, ts, raw FROM events ORDER BY id LIMIT ?", (limit,)).fetchall()
-    return [dict(row) for row in rows]
+    return [Event(id=row["id"], ts=row["ts"], raw=row["raw"]) for row in rows]
 
 
 def ack(db: sqlite3.Connection, upto_id: int) -> None:
@@ -41,14 +48,14 @@ def ack(db: sqlite3.Connection, upto_id: int) -> None:
     db.commit()
 
 
-def post_events(url: str, station: str, events: list[dict], timeout: float) -> None:
+def post_events(url: str, station: str, events: list[Event], timeout: float) -> None:
     body = json.dumps({"station": station, "events": events}).encode()
     req = Request(f"{url}/v1/events", data=body, headers={"Content-Type": "application/json"}, method="POST")
     with urlopen(req, timeout=timeout):  # raises HTTPError on non-2xx, URLError on connection failure
         pass
 
 
-def publish_once(db: sqlite3.Connection, post: Callable[[list[dict]], None], batch_size: int) -> int:
+def publish_once(db: sqlite3.Connection, post: Callable[[list[Event]], None], batch_size: int) -> int:
     batch = next_batch(db, batch_size)
     if not batch:
         return 0
@@ -70,7 +77,7 @@ def main() -> None:
     retry = float(os.environ.get("RETRY_SECONDS", "5"))
     db = open_db(os.environ.get("DB_PATH", "../events.db"))
 
-    def post(events: list[dict]) -> None:
+    def post(events: list[Event]) -> None:
         post_events(url, station, events, timeout=10)
 
     log.info("publishing as station %s to %s", station, url)
