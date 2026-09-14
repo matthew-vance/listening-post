@@ -33,6 +33,10 @@ migrate-down:
 down:
     docker compose down
 
+# Start dump1090 serving SBS-1 on localhost:30003. TZ=UTC makes its timestamps match ingest's.
+dump1090:
+    TZ=UTC dump1090 --net --quiet --fix --net-bind-address 127.0.0.1
+
 # Start the ingest script (env vars documented in README)
 [working-directory: 'ingest']
 ingest:

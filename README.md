@@ -24,7 +24,7 @@ flowchart LR
 
 Four processes run on the Pi:
 
-- **dump1090** ([flightaware/dump1090](https://github.com/flightaware/dump1090)) — reads the SDR dongle, decodes ADS-B, and serves SBS-1 text on TCP port 30003. Not part of this repo; install from the FlightAware packages.
+- **dump1090** ([flightaware/dump1090](https://github.com/flightaware/dump1090)) — reads the SDR dongle, decodes ADS-B, and serves SBS-1 text on TCP port 30003. Not part of this repo; install from the FlightAware packages (or `brew install dump1090-mutability`/`dump1090` locally). `just dump1090` starts it with the right flags: networking on, bound to localhost, CRC error correction, and `TZ=UTC` so its timestamps agree with ingest's.
 - **ingest** (`ingest/`, Python stdlib) — connects to dump1090 and appends every raw line to a SQLite table with a timestamp. Reconnects if dump1090 restarts.
 - **publish** (`publish/`, Python stdlib) — reads batches from that table, POSTs them to the gateway, and deletes rows only after a 2xx. Retries while the gateway is unreachable.
 - **heartbeat** (`heartbeat/`, Python stdlib) — every `INTERVAL_SECONDS`, reads the buffer (read-only) and the OS and POSTs a status report: uptime, free disk, buffer depth, event rate, last event/publish times. Independent of ingest and publish so it keeps reporting when they don't.
@@ -136,7 +136,7 @@ The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus th
 | `squawk` | string | 18 (leading zeros kept) |
 | `alert`, `emergency`, `spi`, `on_ground` | bool | 19–22 (`-1` → true) |
 
-`ts` is the authoritative event time. dump1090 stamps `generated`/`logged` in the Pi's local zone with no offset, so they're kept as strings rather than guessed at; run dump1090 with `TZ=UTC` on the Pi so they line up.
+`ts` is the authoritative event time. dump1090 stamps `generated`/`logged` in its process's local zone with no offset, so they're kept as strings rather than guessed at; `just dump1090` (and the Pi's systemd unit) run it with `TZ=UTC` so they line up.
 
 #### Aircraft state
 
