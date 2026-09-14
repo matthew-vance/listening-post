@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,17 +34,9 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 
 	logger := log.New(stderr, "", log.LstdFlags)
 
-	// ponytail: two env vars; add a config struct when there's a third.
-	envOr := func(key, def string) string {
-		if v := getenv(key); v != "" {
-			return v
-		}
-		return def
-	}
-
 	r := &readiness{}
-	public := &http.Server{Addr: ":" + envOr("PORT", "8080"), Handler: NewServer(logger)}
-	admin := &http.Server{Addr: ":" + envOr("ADMIN_PORT", "9091"), Handler: NewAdminServer(r)}
+	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: NewServer(logger)}
+	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: NewAdminServer(r)}
 
 	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {
