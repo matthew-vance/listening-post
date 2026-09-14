@@ -1,9 +1,12 @@
 package main
 
-import "net/http"
+import (
+	"log"
+	"net/http"
+)
 
-func addRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /v1/events", handleEventsPost())
+func addRoutes(mux *http.ServeMux, logger *log.Logger) {
+	mux.Handle("POST /v1/events", handleEventsPost(logger))
 }
 
 func addAdminRoutes(mux *http.ServeMux, r *readiness) {

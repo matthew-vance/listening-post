@@ -42,7 +42,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}
 
 	r := &readiness{}
-	public := &http.Server{Addr: ":" + envOr("PORT", "8080"), Handler: NewServer()}
+	public := &http.Server{Addr: ":" + envOr("PORT", "8080"), Handler: NewServer(logger)}
 	admin := &http.Server{Addr: ":" + envOr("ADMIN_PORT", "9091"), Handler: NewAdminServer(r)}
 
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {

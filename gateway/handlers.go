@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 )
@@ -35,16 +36,19 @@ func (r eventsRequest) Valid(_ context.Context) map[string]string {
 	return problems
 }
 
-func handleEventsPost() http.Handler {
+func handleEventsPost(logger *log.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		_, problems, err := decodeValid[eventsRequest](r)
+		req, problems, err := decodeValid[eventsRequest](r)
 		switch {
 		case problems != nil:
 			encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
 		case err != nil:
 			encode(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		default:
+			// ponytail: placeholder until events are stored/forwarded somewhere.
+			first, last := req.Events[0], req.Events[len(req.Events)-1]
+			logger.Printf("station %s: received %d events (ids %d..%d)", req.Station, len(req.Events), first.ID, last.ID)
 			w.WriteHeader(http.StatusOK)
 		}
 	})

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"sync/atomic"
 )
@@ -9,9 +10,9 @@ type readiness struct {
 	ready, shuttingDown atomic.Bool
 }
 
-func NewServer() http.Handler {
+func NewServer(logger *log.Logger) http.Handler {
 	mux := http.NewServeMux()
-	addRoutes(mux)
+	addRoutes(mux, logger)
 	return mux
 }
 
