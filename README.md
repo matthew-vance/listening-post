@@ -8,7 +8,7 @@ An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dum
 Raspberry Pi                                        Server
 ┌──────────┐   :30003   ┌────────┐   events.db   ┌─────────┐   POST /v1/events   ┌─────────┐
 │ dump1090 │ ─────────▶ │ ingest │ ────────────▶ │ publish │ ──────────────────▶ │ gateway │
-└──────────┘   SBS-1    └────────┘    SQLite     └─────────┘      HTTP :80       └─────────┘
+└──────────┘   SBS-1    └────────┘    SQLite     └─────────┘     HTTP :8080      └─────────┘
 ```
 
 Three processes run on the Pi:
@@ -21,7 +21,7 @@ The SQLite file is the buffer between the two: it survives Pi reboots and gatewa
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`), listening on port 80, and currently just validates and logs incoming batches. Its health probes are on a separate admin port that compose does not publish.
+The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`), listening on port 8080, and currently just validates and logs incoming batches. Its health probes are on a separate admin port that compose does not publish.
 
 ## Gateway
 
@@ -48,7 +48,7 @@ Batching keeps SD card writes down; on power loss at most one batch is lost. A n
 | Variable        | Default                 | Purpose                                              |
 |-----------------|-------------------------|------------------------------------------------------|
 | `DB_PATH`       | `../events.db`          | SQLite buffer file (same file ingest writes)         |
-| `GATEWAY_URL`   | `http://localhost`      | Gateway base URL                                     |
+| `GATEWAY_URL`   | `http://localhost:8080` | Gateway base URL                                     |
 | `STATION_ID`    | hostname                | Identifies this Pi; set it explicitly (stock hostname is `raspberrypi`) |
 | `BATCH_SIZE`    | `500`                   | Events per POST                                      |
 | `POLL_SECONDS`  | `2`                     | Sleep when the buffer is empty                       |
