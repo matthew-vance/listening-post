@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -14,32 +15,60 @@ import (
 
 type stateLoop struct {
 	client *kgo.Client // consumes events.decoded, produces aircraft.state
-	topic  string      // aircraft.state
+	seeds  []string
+	in     string // events.decoded
+	topic  string // aircraft.state
 	state  *state
 	logger *slog.Logger
 	now    func() time.Time
+
+	// mu guards state: rebalance callbacks run concurrently with run whenever the last poll returned nothing,
+	// since the BlockRebalanceOnPoll gate only holds after a non-empty poll.
+	mu sync.Mutex
 }
 
-// warm rebuilds the in-memory picture from the compacted topic so a restart is invisible to consumers:
-// the first snapshot after restart still carries everything learned before it.
-// ponytail: reads the whole topic; partition-aware warm-up when there are several processor instances.
-func (l *stateLoop) warm(ctx context.Context, brokers []string) error {
+// onAssigned rebuilds the in-memory picture for newly owned partitions from the compacted topic, so a restart or
+// rebalance is invisible to consumers: the first snapshot afterwards still carries everything learned before.
+func (l *stateLoop) onAssigned(ctx context.Context, _ *kgo.Client, assigned map[string][]int32) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if err := l.warm(ctx, assigned[l.in]); err != nil {
+		l.logger.Error("warm-up", "err", err) // degraded, not fatal: the next message on each field fills it back in
+	}
+}
+
+// onRevoked forgets aircraft on partitions that now belong to another instance, so this one never expires them.
+func (l *stateLoop) onRevoked(_ context.Context, _ *kgo.Client, revoked map[string][]int32) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.state.drop(revoked[l.in])
+}
+
+// warm reads the given partitions of aircraft.state to their end. Snapshots are produced to the same partition
+// number their decoded messages arrived on, so partition N of the state topic is exactly what an owner of
+// partition N of events.decoded needs.
+func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
+	if len(partitions) == 0 {
+		return nil
+	}
 	admin := kadm.NewClient(l.client)
 	ends, err := admin.ListEndOffsets(ctx, l.topic)
 	if err != nil {
 		return fmt.Errorf("list end offsets: %w", err)
 	}
 	remaining := map[int32]int64{}
-	ends.Each(func(o kadm.ListedOffset) {
-		if o.Offset > 0 {
-			remaining[o.Partition] = o.Offset
+	offsets := map[int32]kgo.Offset{}
+	for _, p := range partitions {
+		if o, ok := ends.Lookup(l.topic, p); ok && o.Offset > 0 {
+			remaining[p] = o.Offset
+			offsets[p] = kgo.NewOffset().AtStart()
 		}
-	})
+	}
 	if len(remaining) == 0 {
 		return nil
 	}
 
-	reader, err := kgo.NewClient(kgo.SeedBrokers(brokers...), kgo.ConsumeTopics(l.topic))
+	reader, err := kgo.NewClient(kgo.SeedBrokers(l.seeds...), kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{l.topic: offsets}))
 	if err != nil {
 		return fmt.Errorf("warm-up client: %w", err)
 	}
@@ -67,6 +96,7 @@ func (l *stateLoop) warm(ctx context.Context, brokers []string) error {
 			}
 			a := newAircraft(icao)
 			a.snap = snap
+			a.partition = r.Partition
 			// Every field is at least as new as last_seen's message; exact per-field times aren't persisted.
 			for _, f := range []string{"callsign", "altitude", "ground_speed", "track", "lat", "lon", "vertical_rate", "squawk", "alert", "emergency", "spi", "on_ground", "position_ts"} {
 				a.fieldTS[f] = snap.LastSeen
@@ -75,7 +105,7 @@ func (l *stateLoop) warm(ctx context.Context, brokers []string) error {
 			loaded++
 		})
 	}
-	l.logger.Info("warmed state", "aircraft", len(l.state.aircraft), "records", loaded)
+	l.logger.Info("warmed state", "partitions", partitions, "aircraft", len(l.state.aircraft), "records", loaded)
 	return nil
 }
 
@@ -95,6 +125,7 @@ func (l *stateLoop) run(ctx context.Context) error {
 			return fmt.Errorf("poll: %w", err)
 		}
 
+		l.mu.Lock()
 		var out []*kgo.Record
 		fetches.EachRecord(func(in *kgo.Record) {
 			var m decodedRecord
@@ -105,18 +136,20 @@ func (l *stateLoop) run(ctx context.Context) error {
 			if m.ICAO == "" {
 				return // nothing to key state on
 			}
-			if snap, changed := l.state.apply(m); changed {
+			if snap, changed := l.state.apply(m, in.Partition); changed {
 				value, _ := json.Marshal(snap)
-				out = append(out, &kgo.Record{Topic: l.topic, Key: []byte(m.ICAO), Value: value})
+				out = append(out, &kgo.Record{Topic: l.topic, Partition: in.Partition, Key: []byte(m.ICAO), Value: value})
 			}
 		})
 		if now := l.now(); now.Sub(lastSweep) >= sweepEvery {
 			lastSweep = now
-			for _, icao := range l.state.expire(now) {
-				out = append(out, &kgo.Record{Topic: l.topic, Key: []byte(icao), Value: nil})
-				l.logger.Info("expired", "icao", icao)
+			for _, a := range l.state.expire(now) {
+				out = append(out, &kgo.Record{Topic: l.topic, Partition: a.partition, Key: []byte(a.snap.ICAO), Value: nil})
+				l.logger.Info("expired", "icao", a.snap.ICAO)
 			}
 		}
+		tracked := len(l.state.aircraft)
+		l.mu.Unlock()
 
 		if len(out) > 0 {
 			if err := l.client.ProduceSync(ctx, out...).FirstErr(); err != nil {
@@ -132,8 +165,9 @@ func (l *stateLoop) run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("commit offsets: %w", err)
 		}
+		l.client.AllowRebalance()
 		if len(out) > 0 {
-			l.logger.Info("state", "snapshots", len(out), "tracked", len(l.state.aircraft))
+			l.logger.Info("state", "snapshots", len(out), "tracked", tracked)
 		}
 	}
 }

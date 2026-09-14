@@ -80,8 +80,13 @@ func startKafka(ctx context.Context) (testcontainers.Container, error) {
 	return c, nil
 }
 
-// testTopic creates a uniquely named topic (auto-create is off, as in production) and returns its name.
+// testTopic creates a uniquely named single-partition topic (auto-create is off, as in production) and returns its name.
 func testTopic(t *testing.T) string {
+	t.Helper()
+	return testTopicN(t, 1)
+}
+
+func testTopicN(t *testing.T, partitions int32) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("needs docker")
@@ -92,7 +97,7 @@ func testTopic(t *testing.T) string {
 	}
 	defer client.Close()
 	name := fmt.Sprintf("t_%d", time.Now().UnixNano())
-	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), 1, 1, nil, name); err != nil {
+	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), partitions, 1, nil, name); err != nil {
 		t.Fatal(err)
 	}
 	return name

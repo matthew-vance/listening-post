@@ -53,6 +53,7 @@ func (p *processor) run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("commit offsets: %w", err)
 		}
+		p.client.AllowRebalance()
 		p.logger.Info("decoded", "in", len(out)+skipped, "out", len(out), "skipped", skipped)
 	}
 }

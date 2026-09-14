@@ -95,17 +95,31 @@ func TestApplyOlderMessageCannotRegressButCanFill(t *testing.T) {
 
 func TestExpire(t *testing.T) {
 	s := newState(5 * time.Minute)
-	s.apply(msg("s1", base, position))
-	s.apply(msg("s1", base.Add(10*time.Minute), "MSG,3,1,1,ABCDEF,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,1000,,,40.0,-83.0,,,0,,0,0"))
+	s.apply(msg("s1", base, position), 0)
+	s.apply(msg("s1", base.Add(10*time.Minute), "MSG,3,1,1,ABCDEF,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,1000,,,40.0,-83.0,,,0,,0,0"), 1)
 
 	expired := s.expire(base.Add(11 * time.Minute))
-	if !reflect.DeepEqual(expired, []string{"A22123"}) {
-		t.Fatalf("expired = %v, want [A22123]", expired)
+	if len(expired) != 1 || expired[0].snap.ICAO != "A22123" || expired[0].partition != 0 {
+		t.Fatalf("expired = %v, want [A22123 on partition 0]", expired)
 	}
 	if _, ok := s.aircraft["A22123"]; ok {
 		t.Fatal("expired aircraft still tracked")
 	}
 	if _, ok := s.aircraft["ABCDEF"]; !ok {
 		t.Fatal("live aircraft dropped")
+	}
+}
+
+func TestDropPartitions(t *testing.T) {
+	s := newState(5 * time.Minute)
+	s.apply(msg("s1", base, position), 0)
+	s.apply(msg("s1", base, "MSG,3,1,1,ABCDEF,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,1000,,,40.0,-83.0,,,0,,0,0"), 1)
+
+	s.drop([]int32{1})
+	if _, ok := s.aircraft["ABCDEF"]; ok {
+		t.Fatal("aircraft on dropped partition still tracked")
+	}
+	if _, ok := s.aircraft["A22123"]; !ok {
+		t.Fatal("aircraft on kept partition dropped")
 	}
 }

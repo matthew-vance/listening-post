@@ -148,9 +148,9 @@ A second loop in the same service folds `events.decoded` into per-aircraft state
  "first_seen":"…","last_seen":"…","position_ts":"…","stations":["3ae884ac-…"],"messages":412,"updated":["lat","lon","position_ts"]}
 ```
 
-Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. `updated` names what changed in that snapshot. On restart the processor rebuilds state from the compacted topic, so restarts are invisible downstream.
+Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. `updated` names what changed in that snapshot. Each instance holds state only for the `events.decoded` partitions it owns, rebuilding it from the compacted topic when a partition is assigned and forgetting it when one is revoked, so restarts and rebalances are invisible downstream.
 
-It consumes `events.decoded` rather than deriving state inside the decode loop because decoded partitions are keyed by ICAO: a second processor instance would split *aircraft* between them, not stations.
+It consumes `events.decoded` rather than deriving state inside the decode loop because decoded partitions are keyed by ICAO: multiple processor instances split *aircraft* between them, not stations. A snapshot is written to the same partition number of `aircraft.state` its messages arrived on, so `aircraft.state` needs at least as many partitions as `events.decoded`.
 
 | Variable            | Default           | Purpose                                   |
 |---------------------|-------------------|-------------------------------------------|

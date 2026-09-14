@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -167,5 +168,94 @@ func TestStateWarmsFromCompactedTopic(t *testing.T) {
 	}
 	if snap["callsign"] != "AAL433" || snap["altitude"] != float64(8275) {
 		t.Fatalf("snapshot after restart = %s", recs[1].Value)
+	}
+}
+
+// TestStateSurvivesRebalance runs two instances against 2-partition topics: the second joining moves a partition,
+// and the first must forget those aircraft rather than expire them out from under the new owner.
+func TestStateSurvivesRebalance(t *testing.T) {
+	in, out, stateTopic := testTopicN(t, 2), testTopicN(t, 2), testTopicN(t, 2)
+	getenv := func(key string) string {
+		return map[string]string{
+			"KAFKA_BROKERS":     strings.Join(kafkaBrokers, ","),
+			"KAFKA_IN":          in,
+			"KAFKA_OUT":         out,
+			"KAFKA_GROUP":       "g_" + in,
+			"KAFKA_STATE":       stateTopic,
+			"KAFKA_STATE_GROUP": "gs_" + in,
+			"EXPIRE_SECONDS":    "2",
+		}[key]
+	}
+	icaos := []string{"A00001", "A00002", "A00003", "A00004", "A00005", "A00006", "A00007", "A00008"}
+	producer, err := kgo.NewClient(kgo.SeedBrokers(kafkaBrokers...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer producer.Close()
+	producePositions := func() {
+		t.Helper()
+		var records []*kgo.Record
+		for i, icao := range icaos {
+			raw := "MSG,3,1,1," + icao + ",1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0"
+			v, _ := json.Marshal(eventRecord{StationID: "st", ID: int64(i), TS: time.Now().UTC(), Raw: raw, ReceivedAt: time.Now().UTC()})
+			records = append(records, &kgo.Record{Topic: in, Key: []byte("st"), Value: v})
+		}
+		if err := producer.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := func() (context.CancelFunc, chan error) {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- run(ctx, getenv, io.Discard) }()
+		return cancel, done
+	}
+
+	cancelA, doneA := start()
+	producePositions()
+	decoded, snaps := consume(t, out, len(icaos)), consume(t, stateTopic, len(icaos))
+	partitionOf := map[string]int32{}
+	for _, rec := range decoded {
+		partitionOf[string(rec.Key)] = rec.Partition
+	}
+	if partitionOf[icaos[0]] == partitionOf[icaos[1]] && partitionOf[icaos[1]] == partitionOf[icaos[2]] && partitionOf[icaos[2]] == partitionOf[icaos[3]] {
+		t.Fatalf("aircraft don't span both partitions: %v", partitionOf)
+	}
+	for _, rec := range snaps {
+		if want := partitionOf[string(rec.Key)]; rec.Partition != want {
+			t.Fatalf("snapshot for %s on partition %d, decoded on %d", rec.Key, rec.Partition, want)
+		}
+	}
+
+	// second instance joins; keep every aircraft alive through the rebalance and past the first sweep after it
+	cancelB, doneB := start()
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
+		producePositions()
+		time.Sleep(500 * time.Millisecond)
+	}
+	// anything tombstoned before production stopped was expired out from under a live feed
+	stop := time.Now()
+	for _, rec := range consumeUpTo(t, stateTopic, 10000, 2*time.Second) {
+		if rec.Value == nil && rec.Timestamp.Before(stop) {
+			t.Fatalf("live aircraft %s tombstoned on partition %d", rec.Key, rec.Partition)
+		}
+	}
+
+	// silence: each instance expires its own partition's aircraft
+	tombstoned := map[string]bool{}
+	for deadline := time.Now().Add(25 * time.Second); len(tombstoned) < len(icaos) && time.Now().Before(deadline); {
+		for _, rec := range consumeUpTo(t, stateTopic, 10000, 2*time.Second) {
+			if rec.Value == nil {
+				tombstoned[string(rec.Key)] = true
+			}
+		}
+	}
+	if len(tombstoned) != len(icaos) {
+		t.Fatalf("tombstoned %d of %d aircraft: %v", len(tombstoned), len(icaos), tombstoned)
+	}
+	cancelA()
+	cancelB()
+	if err := errors.Join(<-doneA, <-doneB); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"slices"
 	"time"
 )
@@ -29,8 +30,9 @@ type snapshot struct {
 }
 
 type aircraft struct {
-	snap    snapshot
-	fieldTS map[string]time.Time // event ts at which each field was last set
+	snap      snapshot
+	fieldTS   map[string]time.Time // event ts at which each field was last set
+	partition int32                // events.decoded partition its messages arrive on; its snapshots go to the same number on aircraft.state
 }
 
 func newAircraft(icao string) *aircraft {
@@ -99,25 +101,35 @@ func newState(expiry time.Duration) *state {
 }
 
 // apply routes a message to its aircraft, creating it on first sight, and returns the snapshot if it changed.
-func (s *state) apply(m decodedRecord) (snapshot, bool) {
+func (s *state) apply(m decodedRecord, partition int32) (snapshot, bool) {
 	a, ok := s.aircraft[m.ICAO]
 	if !ok {
 		a = newAircraft(m.ICAO)
 		s.aircraft[m.ICAO] = a
 	}
+	a.partition = partition
 	a.apply(m)
 	return a.snap, len(a.snap.Updated) > 0
 }
 
-// expire drops aircraft silent for longer than the expiry and returns their ICAOs, sorted, for tombstoning.
-func (s *state) expire(now time.Time) []string {
-	var gone []string
+// expire drops aircraft silent for longer than the expiry and returns them, sorted by ICAO, for tombstoning.
+func (s *state) expire(now time.Time) []*aircraft {
+	var gone []*aircraft
 	for icao, a := range s.aircraft {
 		if now.Sub(a.snap.LastSeen) > s.expiry {
-			gone = append(gone, icao)
+			gone = append(gone, a)
 			delete(s.aircraft, icao)
 		}
 	}
-	slices.Sort(gone)
+	slices.SortFunc(gone, func(a, b *aircraft) int { return cmp.Compare(a.snap.ICAO, b.snap.ICAO) })
 	return gone
+}
+
+// drop forgets every aircraft on the given partitions: another instance owns them now.
+func (s *state) drop(partitions []int32) {
+	for icao, a := range s.aircraft {
+		if slices.Contains(partitions, a.partition) {
+			delete(s.aircraft, icao)
+		}
+	}
 }

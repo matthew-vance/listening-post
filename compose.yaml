@@ -125,6 +125,7 @@ services:
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
           --topic events.decoded --partitions 3 --replication-factor 1
         # compacted: latest snapshot per aircraft. Small segments so compaction actually runs at this volume.
+        # Needs at least as many partitions as events.decoded: the processor writes snapshots partition-for-partition.
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
           --topic aircraft.state --partitions 3 --replication-factor 1 \
           --config cleanup.policy=compact --config segment.ms=600000 --config min.cleanable.dirty.ratio=0.1
