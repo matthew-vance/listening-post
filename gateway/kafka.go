@@ -10,12 +10,9 @@ import (
 )
 
 // openKafka connects and pings so a bad broker address fails at startup, like openDB.
+// Default acks (all ISRs) are what we need: the Pi deletes on our 200, so the broker must have it first.
 func openKafka(ctx context.Context, brokers []string) (*kgo.Client, error) {
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers(brokers...),
-		kgo.RequiredAcks(kgo.AllISRAcks()), // the Pi deletes on our 200, so the broker must have it first
-		kgo.ProducerBatchCompression(kgo.SnappyCompression()),
-	)
+	client, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
 	if err != nil {
 		return nil, fmt.Errorf("configure kafka client: %w", err)
 	}

@@ -39,7 +39,7 @@ func (l *stateLoop) warm(ctx context.Context, brokers []string) error {
 		return nil
 	}
 
-	reader, err := kgo.NewClient(kgo.SeedBrokers(brokers...), kgo.ConsumeTopics(l.topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	reader, err := kgo.NewClient(kgo.SeedBrokers(brokers...), kgo.ConsumeTopics(l.topic))
 	if err != nil {
 		return fmt.Errorf("warm-up client: %w", err)
 	}

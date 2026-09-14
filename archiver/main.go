@@ -59,7 +59,6 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(), // offsets advance only once files are on disk
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 	)
 	if err != nil {
 		return fmt.Errorf("configure kafka client: %w", err)

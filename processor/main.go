@@ -91,8 +91,6 @@ func consumerClient(ctx context.Context, seeds []string, group, topic string) (*
 		kgo.ConsumerGroup(group),
 		kgo.ConsumeTopics(topic),
 		kgo.DisableAutoCommit(), // offsets advance only after the produced batch is acked
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.RequiredAcks(kgo.AllISRAcks()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("configure kafka client for %s: %w", topic, err)
