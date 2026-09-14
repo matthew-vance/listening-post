@@ -105,7 +105,7 @@ def main() -> None:
     url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
     token = os.environ.get("STATION_TOKEN")
     if not token:
-        log.error("STATION_TOKEN is not set; mint one with `just token` and register its hash in stations.json")
+        log.error("STATION_TOKEN is not set; mint one with `just station-add`")
         sys.exit(1)
     db_path = os.environ.get("DB_PATH", "../events.db")
     interval = float(os.environ.get("INTERVAL_SECONDS", "60"))

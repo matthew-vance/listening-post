@@ -73,7 +73,7 @@ def main() -> None:
     url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
     token = os.environ.get("STATION_TOKEN")
     if not token:
-        log.error("STATION_TOKEN is not set; mint one with `just token` and register its hash in stations.json")
+        log.error("STATION_TOKEN is not set; mint one with `just station-add`")
         sys.exit(1)
     batch_size = int(os.environ.get("BATCH_SIZE", "500"))
     poll = float(os.environ.get("POLL_SECONDS", "2"))
