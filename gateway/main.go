@@ -63,15 +63,5 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Drain public first so /readyz reports 503 to probes for the whole drain window.
-	return errors.Join(
-		wrapErr("shutdown public server", public.Shutdown(shutdownCtx)),
-		wrapErr("shutdown admin server", admin.Shutdown(shutdownCtx)),
-	)
-}
-
-func wrapErr(msg string, err error) error {
-	if err != nil {
-		return fmt.Errorf("%s: %w", msg, err)
-	}
-	return nil
+	return errors.Join(public.Shutdown(shutdownCtx), admin.Shutdown(shutdownCtx))
 }
