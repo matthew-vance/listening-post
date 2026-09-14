@@ -6,7 +6,7 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -17,37 +17,66 @@ CREATE TABLE IF NOT EXISTS events (
 """
 
 log = logging.getLogger("ingest")
-PROGRESS_EVERY = 1000
 
 
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
     db.execute("PRAGMA journal_mode=WAL")  # publish reads while we write
+    db.execute("PRAGMA synchronous=NORMAL")  # fsync at checkpoint, not per commit; only power loss can lose rows
     db.execute(SCHEMA)
     db.commit()
     return db
 
 
-def ingest(lines: Iterable[str], db: sqlite3.Connection, now: Callable[[], datetime]) -> int:
-    written = 0
-    for line in lines:
-        if not line:
-            continue
-        # ponytail: commit per line; batch every N lines if the Pi's SD card can't keep up.
-        db.execute("INSERT INTO events (ts, raw) VALUES (?, ?)", (now().isoformat(), line))
-        db.commit()
-        written += 1
-        log.debug("event %s", line)
-        if written % PROGRESS_EVERY == 0:
-            log.info("ingested %d events this connection", written)
+def ingest(
+    lines: Iterable[str],
+    db: sqlite3.Connection,
+    now: Callable[[], datetime],
+    *,
+    batch_size: int,
+    flush_after: timedelta,
+) -> int:
+    """Commit every batch_size lines or flush_after since the last commit, whichever is first."""
+    written = pending = 0
+    last_flush = now()
+    try:
+        for line in lines:
+            if pending and (pending >= batch_size or now() - last_flush >= flush_after):
+                db.commit()
+                log.info("committed %d events (%d total this connection)", pending, written)
+                pending = 0
+                last_flush = now()
+            if not line:  # blank line or idle heartbeat from connect()
+                continue
+            db.execute("INSERT INTO events (ts, raw) VALUES (?, ?)", (now().isoformat(), line))
+            pending += 1
+            written += 1
+            log.debug("event %s", line)
+    finally:
+        db.commit()  # stream closed, error, or shutdown: never drop the pending batch
+        if pending:
+            log.info("committed %d events (%d total this connection)", pending, written)
     return written
 
 
-def connect(host: str, port: int) -> Iterator[str]:
-    with socket.create_connection((host, port)) as sock, sock.makefile("r") as stream:
+def connect(host: str, port: int, idle_timeout: float) -> Iterator[str]:
+    """Yield lines from the SBS feed, and "" whenever idle_timeout passes without data."""
+    # ponytail: heartbeats mean a half-open peer is never detected; cap consecutive timeouts if that bites.
+    with socket.create_connection((host, port), timeout=idle_timeout) as sock:
         log.info("connected to %s:%d", host, port)
-        for line in stream:
-            yield line.rstrip("\r\n")
+        buf = b""
+        while True:
+            try:
+                chunk = sock.recv(4096)
+            except TimeoutError:
+                yield ""
+                continue
+            if not chunk:
+                return
+            buf += chunk
+            while (nl := buf.find(b"\n")) != -1:
+                line, buf = buf[:nl], buf[nl + 1 :]
+                yield line.decode(errors="replace").rstrip("\r")
 
 
 def utcnow() -> datetime:
@@ -61,12 +90,15 @@ def main() -> None:
     )
     host = os.environ.get("DUMP1090_HOST", "localhost")
     port = int(os.environ.get("DUMP1090_PORT", "30003"))
+    batch_size = int(os.environ.get("BATCH_SIZE", "100"))
+    flush_after = timedelta(seconds=float(os.environ.get("FLUSH_SECONDS", "5")))
     db = open_db(os.environ.get("DB_PATH", "events.db"))
 
     try:
         while True:
             try:
-                written = ingest(connect(host, port), db, utcnow)
+                lines = connect(host, port, idle_timeout=flush_after.total_seconds())
+                written = ingest(lines, db, utcnow, batch_size=batch_size, flush_after=flush_after)
                 log.warning("stream closed after %d events", written)
             except OSError as e:
                 log.warning("connection failed: %s", e)
