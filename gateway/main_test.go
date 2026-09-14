@@ -113,8 +113,8 @@ func TestRun(t *testing.T) {
 		return ""
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, getenv, io.Discard) }()
