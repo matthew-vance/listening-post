@@ -7,11 +7,6 @@ import (
 	"path/filepath"
 )
 
-// blobStore is where finished files go. dirStore is the local adapter; an S3 adapter can replace it later.
-type blobStore interface {
-	Put(ctx context.Context, path string, data []byte) error
-}
-
 type dirStore struct {
 	root string
 }

@@ -12,7 +12,7 @@ import (
 
 type archiver struct {
 	client       *kgo.Client
-	store        blobStore
+	store        *dirStore
 	logger       *slog.Logger
 	flushRecords int
 	flushAfter   time.Duration

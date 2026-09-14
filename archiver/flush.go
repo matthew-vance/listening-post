@@ -14,7 +14,7 @@ type fileKey struct {
 
 // groupAndWrite writes one file per (event date, station, kafka partition) present in rows. File names carry
 // the offset range they hold, so re-processing the same records regenerates identical paths and overwrites them.
-func groupAndWrite(ctx context.Context, logger *slog.Logger, store blobStore, rows []row) ([]string, error) {
+func groupAndWrite(ctx context.Context, logger *slog.Logger, store *dirStore, rows []row) ([]string, error) {
 	groups := map[fileKey][]row{}
 	for _, r := range rows {
 		k := fileKey{r.partition(), r.KafkaPartition}
