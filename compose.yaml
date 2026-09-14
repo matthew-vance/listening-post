@@ -59,6 +59,18 @@ services:
       traefik.http.services.gateway.loadbalancer.healthcheck.port: "9091"
       traefik.http.services.gateway.loadbalancer.healthcheck.interval: 10s
 
+  archiver:
+    build: ./archiver
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      ARCHIVE_DIR: /archive
+    volumes:
+      - ./archive:/archive # bind mount so DuckDB and notebooks read it from the host
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
   kafka:
     image: apache/kafka:4.3.1
     restart: unless-stopped

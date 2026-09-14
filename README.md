@@ -15,6 +15,7 @@ flowchart LR
         traefik --> gateway
         gateway --> postgres[(postgres)]
         gateway -- "events.raw" --> kafka[(kafka)]
+        kafka --> archiver --> archive[(parquet)]
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -87,9 +88,35 @@ just migrate-down     # roll back one
 
 The goose CLI is pinned in `db/go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-gateway` needs Docker: the tests start a throwaway Postgres with testcontainers; `go test -short` skips those.
 
+### Archiver
+
+`archiver/` (Go) consumes `events.raw` and writes every record, untouched, to Hive-partitioned Parquet under `archive/` — the raw system of record everything downstream can be rebuilt from (the "sushi principle": store the raw fish).
+
+```
+archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
+```
+
+- `dt` is the event date (`ts`, UTC), so a station's late backlog lands in the right day. Files are named by Kafka partition and offset range, so re-processing after a crash regenerates the same files instead of duplicating rows. Offsets are committed only after a batch's files are renamed into place.
+- Columns: `station_id, id, ts, raw, received_at, kafka_partition, kafka_offset, kafka_timestamp`. Undecodable records are kept under `dt=unknown/station=unknown` with their bytes in `raw`.
+- Query it in place:
+  ```sql
+  SELECT dt, station, count(*) FROM read_parquet('archive/**/*.parquet', hive_partitioning = true) GROUP BY ALL;
+  ```
+
+| Variable        | Default      | Purpose                                            |
+|-----------------|--------------|----------------------------------------------------|
+| `KAFKA_BROKERS` | *(required)* | Comma-separated bootstrap brokers                  |
+| `KAFKA_TOPIC`   | `events.raw` | Topic to archive                                   |
+| `KAFKA_GROUP`   | `archiver`   | Consumer group                                     |
+| `ARCHIVE_DIR`   | *(required)* | Root directory for Parquet files                   |
+| `FLUSH_RECORDS` | `10000`      | Write a batch after this many records              |
+| `FLUSH_SECONDS` | `300`        | …or after this long since the last write           |
+
+`just up` creates `archive/` world-writable because the container runs as `nonroot` against a bind mount; revisit when storage moves to S3.
+
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created; today that's `events.raw` (3 partitions).
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created; today that's `events.raw` (3 partitions, default 7-day retention — can shrink now that the archive is the system of record).
 
 The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}`. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
 

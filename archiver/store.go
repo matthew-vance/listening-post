@@ -1,0 +1,33 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// blobStore is where finished files go. dirStore is the local adapter; an S3 adapter can replace it later.
+type blobStore interface {
+	Put(ctx context.Context, path string, data []byte) error
+}
+
+type dirStore struct {
+	root string
+}
+
+// Put writes atomically: readers (DuckDB, notebooks) never see a partial file.
+func (s *dirStore) Put(_ context.Context, path string, data []byte) error {
+	full := filepath.Join(s.root, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	tmp := full + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, full); err != nil {
+		return fmt.Errorf("rename %s: %w", tmp, err)
+	}
+	return nil
+}

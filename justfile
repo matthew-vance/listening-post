@@ -2,9 +2,14 @@ set dotenv-load
 
 # Bring up the stack: postgres first, migrate, then everything else
 up:
+    mkdir -p archive && chmod 777 archive
     docker compose up -d --wait postgres
     just migrate
     docker compose up -d --build
+
+# Show the newest archived Parquet files
+archive-ls:
+    find archive -name '*.parquet' | sort | tail -n 20
 
 # List Kafka topics
 kafka-topics:
@@ -66,10 +71,14 @@ station-list:
     scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
-test: test-gateway test-ingest test-publish test-heartbeat
+test: test-gateway test-archiver test-ingest test-publish test-heartbeat
 
 [working-directory: 'gateway']
 test-gateway:
+    go test ./...
+
+[working-directory: 'archiver']
+test-archiver:
     go test ./...
 
 [working-directory: 'ingest']
