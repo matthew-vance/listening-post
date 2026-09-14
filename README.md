@@ -9,18 +9,21 @@ flowchart LR
     subgraph pi [Raspberry Pi]
         dump1090 -- "SBS-1 :30003" --> ingest
         ingest -- "events.db (SQLite)" --> publish
+        ingest -. "events.db (read-only)" .-> heartbeat
     end
     subgraph server [Server]
         traefik --> gateway
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
+    heartbeat -- "POST /v1/stations/heartbeat" --> traefik
 ```
 
-Three processes run on the Pi:
+Four processes run on the Pi:
 
 - **dump1090** ([flightaware/dump1090](https://github.com/flightaware/dump1090)) — reads the SDR dongle, decodes ADS-B, and serves SBS-1 text on TCP port 30003. Not part of this repo; install from the FlightAware packages.
 - **ingest** (`ingest/`, Python stdlib) — connects to dump1090 and appends every raw line to a SQLite table with a timestamp. Reconnects if dump1090 restarts.
 - **publish** (`publish/`, Python stdlib) — reads batches from that table, POSTs them to the gateway, and deletes rows only after a 2xx. Retries while the gateway is unreachable.
+- **heartbeat** (`heartbeat/`, Python stdlib) — every `INTERVAL_SECONDS`, reads the buffer (read-only) and the OS and POSTs a status report: uptime, free disk, buffer depth, event rate, last event/publish times. Independent of ingest and publish so it keeps reporting when they don't.
 
 The SQLite file is the buffer between the two: it survives Pi reboots and gateway outages, so the pipeline never loses data as long as the Pi has disk. Requirements on the Pi are just Python ≥ 3.11 and dump1090 — no packages to install.
 
@@ -79,3 +82,15 @@ Batching keeps SD card writes down; on power loss at most one batch is lost. A n
 | `LOG_LEVEL`     | `INFO`             | Logs each published batch                    |
 
 Rows are deleted from the buffer only after the gateway returns 2xx, so delivery is at-least-once: a crash between the response and the delete re-sends that batch. The station (resolved from the token) plus `id` identifies an event uniquely across re-sends.
+
+## Heartbeat
+
+| Variable           | Default            | Purpose                                     |
+|--------------------|--------------------|---------------------------------------------|
+| `DB_PATH`          | `../events.db`     | SQLite buffer file (opened read-only)       |
+| `GATEWAY_URL`      | `http://localhost` | Gateway base URL (Traefik entrypoint)       |
+| `STATION_TOKEN`    | *(required)*       | Bearer token minted with `just token`       |
+| `INTERVAL_SECONDS` | `60`               | Seconds between reports                     |
+| `LOG_LEVEL`        | `INFO`             | Logs each report                            |
+
+Event rate and last event/publish times are derived from how the buffer changes between ticks, so they're absent on the first report after a restart and accurate to `INTERVAL_SECONDS` thereafter.
