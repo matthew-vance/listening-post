@@ -37,11 +37,11 @@ func newAircraft(icao string) *aircraft {
 	return &aircraft{snap: snapshot{ICAO: icao}, fieldTS: map[string]time.Time{}}
 }
 
-// apply merges one decoded message and returns the names of fields whose value changed.
+// apply merges one decoded message and records the names of fields whose value changed in snap.Updated.
 // A field updates only if the message is at least as new as the one that last set it: a station's
 // stale backlog can't regress live state, but a slightly reordered message from another station
 // still lands the fields the newer one lacked.
-func (a *aircraft) apply(m decodedRecord) []string {
+func (a *aircraft) apply(m decodedRecord) {
 	s := &a.snap
 	if s.FirstSeen.IsZero() || m.TS.Before(s.FirstSeen) {
 		s.FirstSeen = m.TS
@@ -82,7 +82,6 @@ func (a *aircraft) apply(m decodedRecord) []string {
 	set("position_ts", hasPosition, hasPosition && !m.TS.Equal(s.PositionTS), func() { s.PositionTS = m.TS })
 
 	s.Updated = changed
-	return changed
 }
 
 func eq[T comparable](a, b *T) bool {
@@ -106,8 +105,8 @@ func (s *state) apply(m decodedRecord) (snapshot, bool) {
 		a = newAircraft(m.ICAO)
 		s.aircraft[m.ICAO] = a
 	}
-	changed := a.apply(m)
-	return a.snap, len(changed) > 0
+	a.apply(m)
+	return a.snap, len(a.snap.Updated) > 0
 }
 
 // expire drops aircraft silent for longer than the expiry and returns their ICAOs, sorted, for tombstoning.

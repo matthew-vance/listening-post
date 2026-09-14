@@ -25,26 +25,26 @@ const (
 func TestApplyMergesMessageTypes(t *testing.T) {
 	a := newAircraft("A22123")
 
-	changed := a.apply(msg("s1", base, position))
+	a.apply(msg("s1", base, position))
 	want := []string{"altitude", "lat", "lon", "alert", "spi", "on_ground", "position_ts"}
-	if !reflect.DeepEqual(changed, want) {
-		t.Fatalf("first apply changed = %v, want %v", changed, want)
+	if !reflect.DeepEqual(a.snap.Updated, want) {
+		t.Fatalf("first apply changed = %v, want %v", a.snap.Updated, want)
 	}
 	if !a.snap.FirstSeen.Equal(base) || !a.snap.LastSeen.Equal(base) || a.snap.Messages != 1 {
 		t.Fatalf("bookkeeping: %+v", a.snap)
 	}
 
-	changed = a.apply(msg("s1", base.Add(time.Second), velocity))
-	if !reflect.DeepEqual(changed, []string{"ground_speed", "track", "vertical_rate"}) {
-		t.Fatalf("velocity changed = %v", changed)
+	a.apply(msg("s1", base.Add(time.Second), velocity))
+	if !reflect.DeepEqual(a.snap.Updated, []string{"ground_speed", "track", "vertical_rate"}) {
+		t.Fatalf("velocity changed = %v", a.snap.Updated)
 	}
 	if *a.snap.Altitude != 8275 || *a.snap.GroundSpeed != 117 || *a.snap.Lat != 40.14684 {
 		t.Fatalf("merged snapshot lost a field: %+v", a.snap)
 	}
 
-	changed = a.apply(msg("s1", base.Add(2*time.Second), ident))
-	if !reflect.DeepEqual(changed, []string{"callsign"}) {
-		t.Fatalf("ident changed = %v", changed)
+	a.apply(msg("s1", base.Add(2*time.Second), ident))
+	if !reflect.DeepEqual(a.snap.Updated, []string{"callsign"}) {
+		t.Fatalf("ident changed = %v", a.snap.Updated)
 	}
 	if a.snap.Callsign != "AAL433" || a.snap.Messages != 3 || !a.snap.LastSeen.Equal(base.Add(2*time.Second)) {
 		t.Fatalf("after ident: %+v", a.snap)
@@ -54,8 +54,9 @@ func TestApplyMergesMessageTypes(t *testing.T) {
 func TestApplyRepeatWithoutChangeIsQuiet(t *testing.T) {
 	a := newAircraft("A22123")
 	a.apply(msg("s1", base, velocity))
-	if changed := a.apply(msg("s1", base.Add(time.Second), velocity)); len(changed) != 0 {
-		t.Fatalf("identical values changed = %v, want none", changed)
+	a.apply(msg("s1", base.Add(time.Second), velocity))
+	if len(a.snap.Updated) != 0 {
+		t.Fatalf("identical values changed = %v, want none", a.snap.Updated)
 	}
 	if a.snap.Messages != 2 || !a.snap.LastSeen.Equal(base.Add(time.Second)) {
 		t.Fatalf("repeat must still count and bump last_seen: %+v", a.snap)
@@ -63,8 +64,9 @@ func TestApplyRepeatWithoutChangeIsQuiet(t *testing.T) {
 
 	// a repeated position is not quiet: position_ts is the staleness signal, so re-confirming it counts
 	a.apply(msg("s1", base.Add(2*time.Second), position))
-	if changed := a.apply(msg("s1", base.Add(3*time.Second), position)); !reflect.DeepEqual(changed, []string{"position_ts"}) {
-		t.Fatalf("repeated position changed = %v, want [position_ts]", changed)
+	a.apply(msg("s1", base.Add(3*time.Second), position))
+	if !reflect.DeepEqual(a.snap.Updated, []string{"position_ts"}) {
+		t.Fatalf("repeated position changed = %v, want [position_ts]", a.snap.Updated)
 	}
 }
 
@@ -73,17 +75,18 @@ func TestApplyOlderMessageCannotRegressButCanFill(t *testing.T) {
 	a.apply(msg("s1", base.Add(time.Hour), position)) // live position at 8275
 
 	stale := "MSG,3,1,1,A22123,1,2026/09/14,14:00:00.000,2026/09/14,14:00:00.000,,2000,,,41.0,-84.0,,,0,,0,0"
-	if changed := a.apply(msg("s2", base, stale)); len(changed) != 0 {
-		t.Fatalf("stale backlog changed = %v, want none", changed)
+	a.apply(msg("s2", base, stale))
+	if len(a.snap.Updated) != 0 {
+		t.Fatalf("stale backlog changed = %v, want none", a.snap.Updated)
 	}
 	if *a.snap.Altitude != 8275 {
 		t.Fatalf("altitude regressed to %d", *a.snap.Altitude)
 	}
 
 	// but an older message still fills fields nothing newer has set
-	changed := a.apply(msg("s2", base, velocity))
-	if !reflect.DeepEqual(changed, []string{"ground_speed", "track", "vertical_rate"}) {
-		t.Fatalf("older velocity changed = %v", changed)
+	a.apply(msg("s2", base, velocity))
+	if !reflect.DeepEqual(a.snap.Updated, []string{"ground_speed", "track", "vertical_rate"}) {
+		t.Fatalf("older velocity changed = %v", a.snap.Updated)
 	}
 	if !reflect.DeepEqual(a.snap.Stations, []string{"s1", "s2"}) {
 		t.Fatalf("stations = %v", a.snap.Stations)
