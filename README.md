@@ -1,6 +1,27 @@
 # Listening Post
 
-An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dump1090) is used to recieve and decode ADS-B messages into the [SBS-1 BaseStation](http://woodair.net/sbs/article/barebones42_socket_data.htm) format.
+An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dump1090) is used to receive and decode ADS-B messages into the [SBS-1 BaseStation](http://woodair.net/sbs/article/barebones42_socket_data.htm) format.
+
+## Architecture
+
+```
+Raspberry Pi                                        Server
+┌──────────┐   :30003   ┌────────┐   events.db   ┌─────────┐   POST /v1/events   ┌─────────┐
+│ dump1090 │ ─────────▶ │ ingest │ ────────────▶ │ publish │ ──────────────────▶ │ gateway │
+└──────────┘   SBS-1    └────────┘    SQLite     └─────────┘      HTTP :80       └─────────┘
+```
+
+Three processes run on the Pi:
+
+- **dump1090** ([flightaware/dump1090](https://github.com/flightaware/dump1090)) — reads the SDR dongle, decodes ADS-B, and serves SBS-1 text on TCP port 30003. Not part of this repo; install from the FlightAware packages.
+- **ingest** (`ingest/`, Python stdlib) — connects to dump1090 and appends every raw line to a SQLite table with a timestamp. Reconnects if dump1090 restarts.
+- **publish** (`publish/`, Python stdlib) — reads batches from that table, POSTs them to the gateway, and deletes rows only after a 2xx. Retries while the gateway is unreachable.
+
+The SQLite file is the buffer between the two: it survives Pi reboots and gateway outages, so the pipeline never loses data as long as the Pi has disk. Requirements on the Pi are just Python ≥ 3.11 and dump1090 — no packages to install.
+
+Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
+
+The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`), listening on port 80, and currently just validates and logs incoming batches. Its health probes are on a separate admin port that compose does not publish.
 
 ## Gateway
 
