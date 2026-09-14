@@ -16,6 +16,7 @@ flowchart LR
         gateway --> postgres[(postgres)]
         gateway -- "events.raw" --> kafka[(kafka)]
         kafka --> archiver --> archive[(parquet)]
+        kafka -- "events.raw" --> processor -- "events.decoded" --> kafka
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -114,9 +115,39 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 
 `just up` creates `archive/` world-writable because the container runs as `nonroot` against a bind mount; revisit when storage moves to S3.
 
+### Processor
+
+`processor/` (Go) is the one place SBS-1 is parsed. It reads `events.raw` and writes one typed JSON record per line to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data.
+
+The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus the [SBS-1 fields](http://woodair.net/sbs/article/barebones42_socket_data.htm), present only when the line carried them:
+
+| key | type | SBS field |
+|---|---|---|
+| `message_type` | string | 1 — `MSG` |
+| `transmission_type` | int | 2 — 1 ident, 2 surface pos, 3 airborne pos, 4 velocity, 5 alt, 6 squawk, 7 air-to-air, 8 all-call |
+| `icao` | string | 5 |
+| `generated`, `logged` | string | 7–10, verbatim (see below) |
+| `callsign` | string | 11, trimmed |
+| `altitude` | int, feet | 12 |
+| `ground_speed` | float, knots | 13 |
+| `track` | float, degrees | 14 |
+| `lat`, `lon` | float | 15–16 |
+| `vertical_rate` | int, ft/min | 17 |
+| `squawk` | string | 18 (leading zeros kept) |
+| `alert`, `emergency`, `spi`, `on_ground` | bool | 19–22 (`-1` → true) |
+
+`ts` is the authoritative event time. dump1090 stamps `generated`/`logged` in the Pi's local zone with no offset, so they're kept as strings rather than guessed at; run dump1090 with `TZ=UTC` on the Pi so they line up.
+
+| Variable        | Default          | Purpose                           |
+|-----------------|------------------|-----------------------------------|
+| `KAFKA_BROKERS` | *(required)*     | Comma-separated bootstrap brokers |
+| `KAFKA_IN`      | `events.raw`     | Topic to read                     |
+| `KAFKA_OUT`     | `events.decoded` | Topic to write                    |
+| `KAFKA_GROUP`   | `processor`      | Consumer group                    |
+
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created; today that's `events.raw` (3 partitions, default 7-day retention — can shrink now that the archive is the system of record).
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created: `events.raw` (keyed by station, archived) and `events.decoded` (keyed by ICAO), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
 The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}`. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
 

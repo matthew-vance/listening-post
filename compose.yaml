@@ -59,6 +59,15 @@ services:
       traefik.http.services.gateway.loadbalancer.healthcheck.port: "9091"
       traefik.http.services.gateway.loadbalancer.healthcheck.interval: 10s
 
+  processor:
+    build: ./processor
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
   archiver:
     build: ./archiver
     restart: unless-stopped
@@ -113,6 +122,8 @@ services:
       - |
         /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
           --topic events.raw --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+          --topic events.decoded --partitions 3 --replication-factor 1
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0

@@ -71,7 +71,7 @@ station-list:
     scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
-test: test-gateway test-archiver test-ingest test-publish test-heartbeat
+test: test-gateway test-archiver test-processor test-ingest test-publish test-heartbeat
 
 [working-directory: 'gateway']
 test-gateway:
@@ -79,6 +79,10 @@ test-gateway:
 
 [working-directory: 'archiver']
 test-archiver:
+    go test ./...
+
+[working-directory: 'processor']
+test-processor:
     go test ./...
 
 [working-directory: 'ingest']
