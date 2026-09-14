@@ -77,17 +77,18 @@ class IngestTest(unittest.TestCase):
         self.assertEqual(count(self.reader), 3)
 
     def test_commits_after_flush_interval_even_on_heartbeats(self) -> None:
-        clock = [FIXED]
+        clock = FIXED
         seen: list[int] = []
 
         def lines() -> Iterator[str]:
+            nonlocal clock
             yield "a"
             seen.append(count(self.reader))
-            clock[0] += timedelta(seconds=6)
+            clock += timedelta(seconds=6)
             yield ""  # idle heartbeat from connect()
             seen.append(count(self.reader))
 
-        ingest(lines(), self.db, lambda: clock[0], batch_size=BIG, flush_after=timedelta(seconds=5))
+        ingest(lines(), self.db, lambda: clock, batch_size=BIG, flush_after=timedelta(seconds=5))
 
         self.assertEqual(seen, [0, 1])
 
