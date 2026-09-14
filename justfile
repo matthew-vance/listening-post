@@ -11,8 +11,13 @@ down:
 ingest:
     python3 ingest.py
 
+# Start the publish script (env vars documented in README)
+[working-directory: 'publish']
+publish:
+    python3 publish.py
+
 # Run all tests; add new projects as dependencies here
-test: test-gateway test-ingest
+test: test-gateway test-ingest test-publish
 
 [working-directory: 'gateway']
 test-gateway:
@@ -20,4 +25,8 @@ test-gateway:
 
 [working-directory: 'ingest']
 test-ingest:
+    python3 -m unittest
+
+[working-directory: 'publish']
+test-publish:
     python3 -m unittest

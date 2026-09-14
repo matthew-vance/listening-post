@@ -22,3 +22,16 @@ An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dum
 
 Batching keeps SD card writes down; on power loss at most one batch is lost. A normal stop (SIGINT/SIGTERM) flushes everything.
 
+## Publish
+
+| Variable        | Default                 | Purpose                                              |
+|-----------------|-------------------------|------------------------------------------------------|
+| `DB_PATH`       | `../events.db`          | SQLite buffer file (same file ingest writes)         |
+| `GATEWAY_URL`   | `http://localhost`      | Gateway base URL (Traefik entrypoint)                |
+| `STATION_ID`    | hostname                | Identifies this Pi; set it explicitly (stock hostname is `raspberrypi`) |
+| `BATCH_SIZE`    | `500`                   | Events per POST                                      |
+| `POLL_SECONDS`  | `2`                     | Sleep when the buffer is empty                       |
+| `RETRY_SECONDS` | `5`                     | Sleep after a failed POST                            |
+| `LOG_LEVEL`     | `INFO`                  | Logs each published batch                            |
+
+Rows are deleted from the buffer only after the gateway returns 2xx, so delivery is at-least-once: a crash between the response and the delete re-sends that batch. `(station, id)` identifies an event uniquely across re-sends.
