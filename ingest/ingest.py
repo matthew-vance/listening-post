@@ -71,7 +71,7 @@ def connect(host: str, port: int, idle_timeout: float) -> Iterator[str]:
     # ponytail: heartbeats mean a half-open peer is never detected; cap consecutive timeouts if that bites.
     with socket.create_connection((host, port), timeout=idle_timeout) as sock:
         log.info("connected to %s:%d", host, port)
-        buf = b""
+        buf = bytearray()
         while True:
             try:
                 chunk = sock.recv(4096)
@@ -82,8 +82,9 @@ def connect(host: str, port: int, idle_timeout: float) -> Iterator[str]:
                 return
             buf += chunk
             while (nl := buf.find(b"\n")) != -1:
-                line, buf = buf[:nl], buf[nl + 1 :]
-                yield line.decode(errors="replace").rstrip("\r")
+                line = buf[:nl].decode(errors="replace").rstrip("\r")
+                del buf[: nl + 1]
+                yield line
 
 
 def main() -> None:
