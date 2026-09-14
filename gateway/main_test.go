@@ -166,7 +166,8 @@ func freePort(t *testing.T) string {
 }
 
 func waitForReady(ctx context.Context, timeout time.Duration, endpoint string) error {
-	start := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
@@ -181,12 +182,8 @@ func waitForReady(ctx context.Context, timeout time.Duration, endpoint string) e
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			if time.Since(start) >= timeout {
-				return fmt.Errorf("timeout waiting for %s", endpoint)
-			}
-			time.Sleep(50 * time.Millisecond)
+			return fmt.Errorf("waiting for %s: %w", endpoint, ctx.Err())
+		case <-time.After(50 * time.Millisecond):
 		}
 	}
 }
