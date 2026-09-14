@@ -1,1 +1,6 @@
 /gateway/gateway
+__pycache__/
+*.db
+*.db-wal
+*.db-shm
+.idea/

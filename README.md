@@ -8,3 +8,12 @@ An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dum
 |--------------|---------|-------------------------------------------|
 | `PORT`       | `8080`  | Public API (`/v1/*`)                      |
 | `ADMIN_PORT` | `9091`  | Internal `/healthz` and `/readyz` probes  |
+
+## Ingest
+
+| Variable        | Default     | Purpose                                              |
+|-----------------|-------------|------------------------------------------------------|
+| `DUMP1090_HOST` | `localhost` | dump1090 host                                        |
+| `DUMP1090_PORT` | `30003`     | dump1090 SBS-1 BaseStation port                      |
+| `DB_PATH`       | `events.db` | SQLite buffer file                                   |
+| `LOG_LEVEL`     | `INFO`      | `DEBUG` logs every raw line; `INFO` logs every 1000  |
