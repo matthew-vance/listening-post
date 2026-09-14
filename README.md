@@ -4,11 +4,16 @@ An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dum
 
 ## Architecture
 
-```
-Raspberry Pi                                        Server
-┌──────────┐   :30003   ┌────────┐   events.db   ┌─────────┐   POST /v1/events   ┌─────────┐   ┌─────────┐
-│ dump1090 │ ─────────▶ │ ingest │ ────────────▶ │ publish │ ──────────────────▶ │ traefik │ ─▶│ gateway │
-└──────────┘   SBS-1    └────────┘    SQLite     └─────────┘    bearer token     └─────────┘   └─────────┘
+```mermaid
+flowchart LR
+    subgraph pi [Raspberry Pi]
+        dump1090 -- "SBS-1 :30003" --> ingest
+        ingest -- "events.db (SQLite)" --> publish
+    end
+    subgraph server [Server]
+        traefik --> gateway
+    end
+    publish -- "POST /v1/events (bearer token)" --> traefik
 ```
 
 Three processes run on the Pi:
