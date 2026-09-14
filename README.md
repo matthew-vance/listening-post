@@ -16,7 +16,7 @@ flowchart LR
         gateway --> postgres[(postgres)]
         gateway -- "events.raw" --> kafka[(kafka)]
         kafka --> archiver --> archive[(parquet)]
-        kafka -- "events.raw" --> processor -- "events.decoded" --> kafka
+        kafka -- "events.raw" --> processor -- "events.decoded, aircraft.state" --> kafka
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -138,16 +138,33 @@ The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus th
 
 `ts` is the authoritative event time. dump1090 stamps `generated`/`logged` in the Pi's local zone with no offset, so they're kept as strings rather than guessed at; run dump1090 with `TZ=UTC` on the Pi so they line up.
 
-| Variable        | Default          | Purpose                           |
-|-----------------|------------------|-----------------------------------|
-| `KAFKA_BROKERS` | *(required)*     | Comma-separated bootstrap brokers |
-| `KAFKA_IN`      | `events.raw`     | Topic to read                     |
-| `KAFKA_OUT`     | `events.decoded` | Topic to write                    |
-| `KAFKA_GROUP`   | `processor`      | Consumer group                    |
+#### Aircraft state
+
+A second loop in the same service folds `events.decoded` into per-aircraft state and publishes a **full snapshot** (never a delta) to `aircraft.state` whenever something changes, keyed by ICAO. The topic is compacted, so it *is* the current picture of the sky: a consumer reads it from the beginning to get every live aircraft, then tails it for updates. An aircraft silent for `EXPIRE_SECONDS` gets a tombstone and drops out.
+
+```json
+{"icao":"A22123","callsign":"AAL433","altitude":8275,"ground_speed":117,"track":240,"lat":40.14684,"lon":-83.17065,
+ "vertical_rate":0,"squawk":"6653","alert":false,"emergency":false,"spi":false,"on_ground":false,
+ "first_seen":"…","last_seen":"…","position_ts":"…","stations":["3ae884ac-…"],"messages":412,"updated":["lat","lon","position_ts"]}
+```
+
+Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. `updated` names what changed in that snapshot. On restart the processor rebuilds state from the compacted topic, so restarts are invisible downstream.
+
+It consumes `events.decoded` rather than deriving state inside the decode loop because decoded partitions are keyed by ICAO: a second processor instance would split *aircraft* between them, not stations.
+
+| Variable            | Default           | Purpose                                   |
+|---------------------|-------------------|-------------------------------------------|
+| `KAFKA_BROKERS`     | *(required)*      | Comma-separated bootstrap brokers         |
+| `KAFKA_IN`          | `events.raw`      | Raw topic to read                         |
+| `KAFKA_OUT`         | `events.decoded`  | Decoded topic to write                    |
+| `KAFKA_GROUP`       | `processor`       | Decode loop consumer group                |
+| `KAFKA_STATE`       | `aircraft.state`  | State topic to write                      |
+| `KAFKA_STATE_GROUP` | `processor-state` | State loop consumer group                 |
+| `EXPIRE_SECONDS`    | `300`             | Tombstone an aircraft silent this long    |
 
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created: `events.raw` (keyed by station, archived) and `events.decoded` (keyed by ICAO), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created: `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
 The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}`. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
 
