@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
-	"slices"
 	"time"
 )
 
@@ -167,8 +165,8 @@ func handleReadyz(r *readiness, checks map[string]func(context.Context) error) h
 		}
 		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
 		defer cancel()
-		for _, name := range slices.Sorted(maps.Keys(checks)) {
-			if err := checks[name](ctx); err != nil {
+		for name, check := range checks {
+			if err := check(ctx); err != nil {
 				encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "reason": name})
 				return
 			}
