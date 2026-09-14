@@ -14,6 +14,7 @@ flowchart LR
     subgraph server [Server]
         traefik --> gateway
         gateway --> postgres[(postgres)]
+        gateway -. "events.raw (next)" .-> kafka[(kafka)]
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -83,6 +84,14 @@ just migrate-down     # roll back one
 ```
 
 The goose CLI is pinned in `db/go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-gateway` needs Docker: the tests start a throwaway Postgres with testcontainers; `go test -short` skips those.
+
+### Kafka
+
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created; today that's `events.raw` (3 partitions). The gateway does not publish to it yet.
+
+- `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
+- Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.
+- `KAFKA_CLUSTER_ID` in `.env` is generated once per environment (see `.env.example`) and must never change — the persisted log directory is bound to it.
 
 #### Zero-downtime migrations
 

@@ -6,6 +6,10 @@ up:
     just migrate
     docker compose up -d --build
 
+# List Kafka topics
+kafka-topics:
+    docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
 # Apply pending migrations (DATABASE_URL from .env)
 [working-directory: 'db']
 migrate:
