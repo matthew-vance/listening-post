@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from publish import Event, open_db, post_events, publish_once
+from publish import open_db, post_events, publish_once
 
 
 def count(db: sqlite3.Connection) -> int:
@@ -20,9 +20,9 @@ class PublishOnceTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.db = open_db(str(Path(tmp.name) / "events.db"))
         self.addCleanup(self.db.close)
-        self.posted: list[list[Event]] = []
+        self.posted: list[list[dict]] = []
 
-    def capture(self, events: list[Event]) -> None:
+    def capture(self, events: list[dict]) -> None:
         self.posted.append(events)
 
     def seed(self, *raws: str) -> None:
@@ -44,13 +44,13 @@ class PublishOnceTest(unittest.TestCase):
 
         self.assertEqual(
             self.posted,
-            [[Event(1, "t", "a"), Event(2, "t", "b")], [Event(3, "t", "c")]],
+            [[{"id": 1, "ts": "t", "raw": "a"}, {"id": 2, "ts": "t", "raw": "b"}], [{"id": 3, "ts": "t", "raw": "c"}]],
         )
 
     def test_failed_post_keeps_rows(self) -> None:
         self.seed("a", "b")
 
-        def failing(_: list[Event]) -> None:
+        def failing(_: list[dict]) -> None:
             raise URLError("connection refused")
 
         with self.assertRaises(URLError):
@@ -82,7 +82,7 @@ class PostEventsTest(unittest.TestCase):
         self.url = f"http://localhost:{self.server.server_port}"
 
     def test_posts_json_batch(self) -> None:
-        post_events(self.url, "dev", [Event(7, "2026-09-13T10:00:00+00:00", "MSG,3")], timeout=2)
+        post_events(self.url, "dev", [{"id": 7, "ts": "2026-09-13T10:00:00+00:00", "raw": "MSG,3"}], timeout=2)
 
         self.assertEqual(
             self.requests,
@@ -98,7 +98,7 @@ class PostEventsTest(unittest.TestCase):
     def test_non_2xx_raises(self) -> None:
         self.status = 500
         with self.assertRaises(HTTPError):
-            post_events(self.url, "dev", [Event(1, "t", "r")], timeout=2)
+            post_events(self.url, "dev", [{"id": 1, "ts": "t", "raw": "r"}], timeout=2)
 
 
 if __name__ == "__main__":

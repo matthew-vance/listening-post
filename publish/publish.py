@@ -7,7 +7,6 @@ import sqlite3
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -23,23 +22,17 @@ CREATE TABLE IF NOT EXISTS events (
 log = logging.getLogger("publish")
 
 
-@dataclass(frozen=True)
-class Event:
-    id: int
-    ts: str
-    raw: str
-
-
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
     db.execute(SCHEMA)  # publish may start before ingest has created the table
     db.commit()
     return db
 
 
-def next_batch(db: sqlite3.Connection, limit: int) -> list[Event]:
+def next_batch(db: sqlite3.Connection, limit: int) -> list[dict]:
     rows = db.execute("SELECT id, ts, raw FROM events ORDER BY id LIMIT ?", (limit,)).fetchall()
-    return [Event(*row) for row in rows]
+    return [dict(row) for row in rows]
 
 
 def ack(db: sqlite3.Connection, upto_id: int) -> None:
@@ -48,20 +41,20 @@ def ack(db: sqlite3.Connection, upto_id: int) -> None:
     db.commit()
 
 
-def post_events(url: str, station: str, events: list[Event], timeout: float) -> None:
-    body = json.dumps({"station": station, "events": [asdict(e) for e in events]}).encode()
+def post_events(url: str, station: str, events: list[dict], timeout: float) -> None:
+    body = json.dumps({"station": station, "events": events}).encode()
     req = Request(f"{url}/v1/events", data=body, headers={"Content-Type": "application/json"}, method="POST")
     with urlopen(req, timeout=timeout):  # raises HTTPError on non-2xx, URLError on connection failure
         pass
 
 
-def publish_once(db: sqlite3.Connection, post: Callable[[list[Event]], None], batch_size: int) -> int:
+def publish_once(db: sqlite3.Connection, post: Callable[[list[dict]], None], batch_size: int) -> int:
     batch = next_batch(db, batch_size)
     if not batch:
         return 0
     post(batch)
-    ack(db, batch[-1].id)
-    log.info("published %d events (ids %d..%d)", len(batch), batch[0].id, batch[-1].id)
+    ack(db, batch[-1]["id"])
+    log.info("published %d events (ids %d..%d)", len(batch), batch[0]["id"], batch[-1]["id"])
     return len(batch)
 
 
@@ -77,7 +70,7 @@ def main() -> None:
     retry = float(os.environ.get("RETRY_SECONDS", "5"))
     db = open_db(os.environ.get("DB_PATH", "../events.db"))
 
-    def post(events: list[Event]) -> None:
+    def post(events: list[dict]) -> None:
         post_events(url, station, events, timeout=10)
 
     log.info("publishing as station %s to %s", station, url)
