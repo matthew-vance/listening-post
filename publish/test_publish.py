@@ -97,8 +97,9 @@ class PostEventsTest(unittest.TestCase):
 
     def test_non_2xx_raises(self) -> None:
         self.status = 500
-        with self.assertRaises(HTTPError):
+        with self.assertRaises(HTTPError) as cm:
             post_events(self.url, "dev", [Event(id=1, ts="t", raw="r")], timeout=2)
+        cm.exception.close()  # HTTPError is file-like; unclosed it warns at GC
 
 
 if __name__ == "__main__":
