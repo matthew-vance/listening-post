@@ -27,7 +27,7 @@ Batching keeps SD card writes down; on power loss at most one batch is lost. A n
 | Variable        | Default                 | Purpose                                              |
 |-----------------|-------------------------|------------------------------------------------------|
 | `DB_PATH`       | `../events.db`          | SQLite buffer file (same file ingest writes)         |
-| `GATEWAY_URL`   | `http://localhost`      | Gateway base URL (Traefik entrypoint)                |
+| `GATEWAY_URL`   | `http://localhost`      | Gateway base URL                                     |
 | `STATION_ID`    | hostname                | Identifies this Pi; set it explicitly (stock hostname is `raspberrypi`) |
 | `BATCH_SIZE`    | `500`                   | Events per POST                                      |
 | `POLL_SECONDS`  | `2`                     | Sleep when the buffer is empty                       |
