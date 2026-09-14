@@ -75,6 +75,7 @@ func TestEventsPost(t *testing.T) {
 		{"empty station", `{"station":"","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"x"}]}`, http.StatusUnprocessableEntity, "station"},
 		{"empty events", `{"station":"dev","events":[]}`, http.StatusUnprocessableEntity, "events"},
 		{"empty raw", `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":""}]}`, http.StatusUnprocessableEntity, "events[0].raw"},
+		{"body too large", `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"` + strings.Repeat("x", 1<<20) + `"}]}`, http.StatusRequestEntityTooLarge, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

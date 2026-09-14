@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -40,9 +41,12 @@ func handleEventsPost(logger *log.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		req, problems, err := decodeValid[eventsRequest](r)
+		var tooBig *http.MaxBytesError
 		switch {
 		case problems != nil:
 			encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
+		case errors.As(err, &tooBig):
+			encode(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
 		case err != nil:
 			encode(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		default:
