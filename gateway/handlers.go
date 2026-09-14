@@ -43,7 +43,7 @@ func handleEventsPost(logger *slog.Logger) http.Handler {
 		req, problems, err := decodeValid[eventsRequest](r)
 		var tooBig *http.MaxBytesError
 		switch {
-		case problems != nil:
+		case len(problems) > 0:
 			encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
 		case errors.As(err, &tooBig):
 			encode(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
@@ -84,10 +84,7 @@ func decodeValid[T validator](r *http.Request) (T, map[string]string, error) {
 	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
 		return v, nil, fmt.Errorf("decode json: %w", err)
 	}
-	if problems := v.Valid(r.Context()); len(problems) > 0 {
-		return v, problems, fmt.Errorf("invalid %T: %d problems", v, len(problems))
-	}
-	return v, nil, nil
+	return v, v.Valid(r.Context()), nil
 }
 
 func encode[T any](w http.ResponseWriter, status int, v T) {
