@@ -2,7 +2,6 @@ import json
 import logging
 import os
 import signal
-import socket
 import sqlite3
 import sys
 import time
@@ -48,9 +47,10 @@ def ack(db: sqlite3.Connection, upto_id: int) -> None:
     db.commit()
 
 
-def post_events(url: str, station: str, events: list[Event], timeout: float) -> None:
-    body = json.dumps({"station": station, "events": events}).encode()
-    req = Request(f"{url}/v1/events", data=body, headers={"Content-Type": "application/json"}, method="POST")
+def post_events(url: str, token: str, events: list[Event], timeout: float) -> None:
+    body = json.dumps({"events": events}).encode()
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    req = Request(f"{url}/v1/events", data=body, headers=headers, method="POST")
     with urlopen(req, timeout=timeout):  # raises HTTPError on non-2xx, URLError on connection failure
         pass
 
@@ -71,16 +71,19 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
-    station = os.environ.get("STATION_ID", socket.gethostname())
+    token = os.environ.get("STATION_TOKEN")
+    if not token:
+        log.error("STATION_TOKEN is not set; mint one with `just token` and register its hash in stations.json")
+        sys.exit(1)
     batch_size = int(os.environ.get("BATCH_SIZE", "500"))
     poll = float(os.environ.get("POLL_SECONDS", "2"))
     retry = float(os.environ.get("RETRY_SECONDS", "5"))
     db = open_db(os.environ.get("DB_PATH", "../events.db"))
 
     def post(events: list[Event]) -> None:
-        post_events(url, station, events, timeout=10)
+        post_events(url, token, events, timeout=10)
 
-    log.info("publishing as station %s to %s", station, url)
+    log.info("publishing to %s", url)
     try:
         while True:
             try:

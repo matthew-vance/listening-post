@@ -9,13 +9,82 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-const validEvents = `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42.468150+00:00","raw":"MSG,3,1,1,ABC123,1"}]}`
+const (
+	validEvents = `{"events":[{"id":1,"ts":"2026-09-13T23:51:42.468150+00:00","raw":"MSG,3,1,1,ABC123,1"}]}`
+	testToken   = "test-token"
+)
+
+func testRegistry() stationRegistry {
+	return stationRegistry{hashToken(testToken): "dev"}
+}
+
+func TestLoadStations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "stations.json")
+	if err := os.WriteFile(path, []byte(`{"dev": "`+hashToken(testToken)+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := loadStations(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if station, ok := reg.lookup(testToken); !ok || station != "dev" {
+		t.Fatalf("lookup = %q, %v; want dev, true", station, ok)
+	}
+	if _, ok := reg.lookup("nope"); ok {
+		t.Fatal("unknown token resolved to a station")
+	}
+
+	if _, err := loadStations(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatal("missing file: want error")
+	}
+}
+
+func TestBearerAuth(t *testing.T) {
+	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(stationFrom(r.Context())))
+	})
+	h := bearerAuth(testRegistry())(echo)
+
+	tests := []struct {
+		name, header string
+		wantCode     int
+		wantBody     string
+	}{
+		{"no header", "", http.StatusUnauthorized, ""},
+		{"wrong scheme", "Basic dGVzdA==", http.StatusUnauthorized, ""},
+		{"unknown token", "Bearer nope", http.StatusUnauthorized, ""},
+		{"valid", "Bearer " + testToken, http.StatusOK, "dev"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
+			if tt.header != "" {
+				req.Header.Set("Authorization", tt.header)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
+			}
+			if tt.wantCode == http.StatusUnauthorized && rec.Header().Get("WWW-Authenticate") != "Bearer" {
+				t.Fatalf("WWW-Authenticate = %q, want Bearer", rec.Header().Get("WWW-Authenticate"))
+			}
+			if tt.wantBody != "" && rec.Body.String() != tt.wantBody {
+				t.Fatalf("body = %q, want %q", rec.Body.String(), tt.wantBody)
+			}
+		})
+	}
+}
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
@@ -65,22 +134,27 @@ func TestReadyz(t *testing.T) {
 func TestEventsPost(t *testing.T) {
 	tests := []struct {
 		name        string
+		token       string
 		body        string
 		wantCode    int
 		wantProblem string // key expected in the 422 problems map
 	}{
-		{"valid", validEvents, http.StatusOK, ""},
-		{"malformed json", `{"station":"dev","events":[`, http.StatusBadRequest, ""},
-		{"bad ts", `{"station":"dev","events":[{"id":1,"ts":"nope","raw":"x"}]}`, http.StatusBadRequest, ""},
-		{"empty station", `{"station":"","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"x"}]}`, http.StatusUnprocessableEntity, "station"},
-		{"empty events", `{"station":"dev","events":[]}`, http.StatusUnprocessableEntity, "events"},
-		{"empty raw", `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":""}]}`, http.StatusUnprocessableEntity, "events[0].raw"},
-		{"body too large", `{"station":"dev","events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"` + strings.Repeat("x", 1<<20) + `"}]}`, http.StatusRequestEntityTooLarge, ""},
+		{"valid", testToken, validEvents, http.StatusOK, ""},
+		{"no auth", "", validEvents, http.StatusUnauthorized, ""},
+		{"malformed json", testToken, `{"events":[`, http.StatusBadRequest, ""},
+		{"bad ts", testToken, `{"events":[{"id":1,"ts":"nope","raw":"x"}]}`, http.StatusBadRequest, ""},
+		{"empty events", testToken, `{"events":[]}`, http.StatusUnprocessableEntity, "events"},
+		{"empty raw", testToken, `{"events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":""}]}`, http.StatusUnprocessableEntity, "events[0].raw"},
+		{"body too large", testToken, `{"events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"` + strings.Repeat("x", 1<<20) + `"}]}`, http.StatusRequestEntityTooLarge, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(tt.body))
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(tt.body)))
+			newServer(slog.New(slog.DiscardHandler), testRegistry()).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -103,12 +177,15 @@ func TestEventsPost(t *testing.T) {
 
 func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
+	stations := writeStations(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
 			return publicPort
 		case "ADMIN_PORT":
 			return adminPort
+		case "STATIONS_FILE":
+			return stations
 		}
 		return ""
 	}
@@ -124,10 +201,10 @@ func TestRun(t *testing.T) {
 	}
 
 	public := "http://localhost:" + publicPort
-	if got := statusOf(t, http.MethodPost, public+"/v1/events", validEvents); got != http.StatusOK {
+	if got := statusOf(t, http.MethodPost, public+"/v1/events", validEvents, testToken); got != http.StatusOK {
 		t.Fatalf("POST /v1/events on public port: status = %d, want %d", got, http.StatusOK)
 	}
-	if got := statusOf(t, http.MethodGet, public+"/healthz", ""); got != http.StatusNotFound {
+	if got := statusOf(t, http.MethodGet, public+"/healthz", "", ""); got != http.StatusNotFound {
 		t.Fatalf("GET /healthz on public port: status = %d, want %d", got, http.StatusNotFound)
 	}
 
@@ -150,9 +227,13 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	stations := writeStations(t)
 	getenv := func(key string) string {
-		if key == "PORT" {
+		switch key {
+		case "PORT":
 			return taken
+		case "STATIONS_FILE":
+			return stations
 		}
 		return freePort(t)
 	}
@@ -170,11 +251,23 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 }
 
-func statusOf(t *testing.T, method, url, body string) int {
+func writeStations(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stations.json")
+	if err := os.WriteFile(path, []byte(`{"dev": "`+hashToken(testToken)+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func statusOf(t *testing.T, method, url, body, token string) int {
 	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

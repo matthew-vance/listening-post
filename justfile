@@ -16,6 +16,13 @@ ingest:
 publish:
     python3 publish.py
 
+# Mint a station token; add the hash to stations.json, give the token to the station
+token:
+    #!/usr/bin/env sh
+    token=$(openssl rand -hex 32)
+    echo "token: $token"
+    echo "hash:  $(printf %s "$token" | openssl dgst -sha256 | awk '{print $NF}')"
+
 # Run all tests; add new projects as dependencies here
 test: test-gateway test-ingest test-publish
 

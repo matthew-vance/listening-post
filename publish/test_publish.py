@@ -68,7 +68,12 @@ class PostEventsTest(unittest.TestCase):
             def do_POST(self) -> None:
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 test.requests.append(
-                    {"path": self.path, "content_type": self.headers["Content-Type"], "body": json.loads(body)}
+                    {
+                        "path": self.path,
+                        "content_type": self.headers["Content-Type"],
+                        "authorization": self.headers["Authorization"],
+                        "body": json.loads(body),
+                    }
                 )
                 self.send_response(test.status)
                 self.end_headers()
@@ -82,7 +87,7 @@ class PostEventsTest(unittest.TestCase):
         self.url = f"http://localhost:{self.server.server_port}"
 
     def test_posts_json_batch(self) -> None:
-        post_events(self.url, "dev", [Event(id=7, ts="2026-09-13T10:00:00+00:00", raw="MSG,3")], timeout=2)
+        post_events(self.url, "secret-token", [Event(id=7, ts="2026-09-13T10:00:00+00:00", raw="MSG,3")], timeout=2)
 
         self.assertEqual(
             self.requests,
@@ -90,7 +95,8 @@ class PostEventsTest(unittest.TestCase):
                 {
                     "path": "/v1/events",
                     "content_type": "application/json",
-                    "body": {"station": "dev", "events": [{"id": 7, "ts": "2026-09-13T10:00:00+00:00", "raw": "MSG,3"}]},
+                    "authorization": "Bearer secret-token",
+                    "body": {"events": [{"id": 7, "ts": "2026-09-13T10:00:00+00:00", "raw": "MSG,3"}]},
                 }
             ],
         )
@@ -98,7 +104,7 @@ class PostEventsTest(unittest.TestCase):
     def test_non_2xx_raises(self) -> None:
         self.status = 500
         with self.assertRaises(HTTPError) as cm:
-            post_events(self.url, "dev", [Event(id=1, ts="t", raw="r")], timeout=2)
+            post_events(self.url, "secret-token", [Event(id=1, ts="t", raw="r")], timeout=2)
         cm.exception.close()  # HTTPError is file-like; unclosed it warns at GC
 
 

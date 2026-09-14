@@ -17,15 +17,11 @@ type event struct {
 }
 
 type eventsRequest struct {
-	Station string  `json:"station"`
-	Events  []event `json:"events"`
+	Events []event `json:"events"`
 }
 
 func (r eventsRequest) Valid(_ context.Context) map[string]string {
 	problems := map[string]string{}
-	if r.Station == "" {
-		problems["station"] = "must not be empty"
-	}
 	if len(r.Events) == 0 {
 		problems["events"] = "must not be empty"
 	}
@@ -52,7 +48,7 @@ func handleEventsPost(logger *slog.Logger) http.Handler {
 		default:
 			// ponytail: placeholder until events are stored/forwarded somewhere.
 			first, last := req.Events[0], req.Events[len(req.Events)-1]
-			logger.Info("received events", "station", req.Station, "count", len(req.Events), "first_id", first.ID, "last_id", last.ID)
+			logger.Info("received events", "station", stationFrom(r.Context()), "count", len(req.Events), "first_id", first.ID, "last_id", last.ID)
 			w.WriteHeader(http.StatusOK)
 		}
 	})

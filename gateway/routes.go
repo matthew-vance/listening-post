@@ -5,8 +5,8 @@ import (
 	"net/http"
 )
 
-func addRoutes(mux *http.ServeMux, logger *slog.Logger) {
-	mux.Handle("POST /v1/events", handleEventsPost(logger))
+func addRoutes(mux *http.ServeMux, logger *slog.Logger, reg stationRegistry) {
+	mux.Handle("POST /v1/events", bearerAuth(reg)(handleEventsPost(logger)))
 }
 
 func addAdminRoutes(mux *http.ServeMux, r *readiness) {

@@ -25,6 +25,10 @@ services:
   gateway:
     build: ./gateway
     restart: unless-stopped
+    environment:
+      STATIONS_FILE: /stations.json
+    volumes:
+      - ./stations.json:/stations.json:ro
     labels:
       traefik.enable: "true"
       traefik.http.routers.gateway.rule: PathPrefix(`/v1`)
