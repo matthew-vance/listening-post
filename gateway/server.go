@@ -13,12 +13,15 @@ type readiness struct {
 
 func newServer(logger *slog.Logger, stations stationLookup, store heartbeatSaver, pub eventPublisher) http.Handler {
 	mux := http.NewServeMux()
-	addRoutes(mux, logger, stations, store, pub)
+	auth := bearerAuth(logger, stations)
+	mux.Handle("POST /v1/events", auth(handleEventsPost(logger, pub)))
+	mux.Handle("POST /v1/stations/heartbeat", auth(handleHeartbeatPost(logger, store)))
 	return mux
 }
 
 func newAdminServer(r *readiness, checks map[string]func(context.Context) error) http.Handler {
 	mux := http.NewServeMux()
-	addAdminRoutes(mux, r, checks)
+	mux.Handle("GET /healthz", handleHealthz())
+	mux.Handle("GET /readyz", handleReadyz(r, checks))
 	return mux
 }
