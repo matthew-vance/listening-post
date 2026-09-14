@@ -37,21 +37,94 @@ func handleEventsPost(logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		req, problems, err := decodeValid[eventsRequest](r)
-		var tooBig *http.MaxBytesError
-		switch {
-		case len(problems) > 0:
-			encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
-		case errors.As(err, &tooBig):
-			encode(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
-		case err != nil:
-			encode(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-		default:
-			// ponytail: placeholder until events are stored/forwarded somewhere.
-			first, last := req.Events[0], req.Events[len(req.Events)-1]
-			logger.Info("received events", "station", stationFrom(r.Context()), "count", len(req.Events), "first_id", first.ID, "last_id", last.ID)
-			w.WriteHeader(http.StatusOK)
+		if respondDecodeError(w, problems, err) {
+			return
 		}
+		// ponytail: placeholder until events are stored/forwarded somewhere.
+		first, last := req.Events[0], req.Events[len(req.Events)-1]
+		logger.Info("received events", "station", stationFrom(r.Context()), "count", len(req.Events), "first_id", first.ID, "last_id", last.ID)
+		w.WriteHeader(http.StatusOK)
 	})
+}
+
+type heartbeatRequest struct {
+	ReportedAt    time.Time `json:"reported_at"`
+	UptimeSeconds int64     `json:"uptime_seconds"`
+	DiskFreeBytes int64     `json:"disk_free_bytes"`
+	BufferDepth   int64     `json:"buffer_depth"`
+	// Optional diagnostics; pointers so absent/null is representable.
+	OldestBufferedTS *time.Time `json:"oldest_buffered_ts"`
+	LastPublishTS    *time.Time `json:"last_publish_ts"`
+	LastEventTS      *time.Time `json:"last_event_ts"`
+	EventRate        *float64   `json:"event_rate"`
+}
+
+func (r heartbeatRequest) Valid(_ context.Context) map[string]string {
+	problems := map[string]string{}
+	if r.ReportedAt.IsZero() {
+		problems["reported_at"] = "must be set"
+	}
+	for name, v := range map[string]int64{
+		"uptime_seconds":  r.UptimeSeconds,
+		"disk_free_bytes": r.DiskFreeBytes,
+		"buffer_depth":    r.BufferDepth,
+	} {
+		if v < 0 {
+			problems[name] = "must not be negative"
+		}
+	}
+	if r.EventRate != nil && *r.EventRate < 0 {
+		problems["event_rate"] = "must not be negative"
+	}
+	return problems
+}
+
+func handleHeartbeatPost(logger *slog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+		req, problems, err := decodeValid[heartbeatRequest](r)
+		if respondDecodeError(w, problems, err) {
+			return
+		}
+		// ponytail: placeholder until heartbeats are stored somewhere.
+		attrs := []any{
+			"station", stationFrom(r.Context()),
+			"uptime_s", req.UptimeSeconds,
+			"disk_free_bytes", req.DiskFreeBytes,
+			"buffer_depth", req.BufferDepth,
+			"clock_skew_s", time.Since(req.ReportedAt).Seconds(),
+		}
+		if req.OldestBufferedTS != nil {
+			attrs = append(attrs, "oldest_buffered_ts", *req.OldestBufferedTS)
+		}
+		if req.LastPublishTS != nil {
+			attrs = append(attrs, "last_publish_ts", *req.LastPublishTS)
+		}
+		if req.LastEventTS != nil {
+			attrs = append(attrs, "last_event_ts", *req.LastEventTS)
+		}
+		if req.EventRate != nil {
+			attrs = append(attrs, "event_rate", *req.EventRate)
+		}
+		logger.Info("heartbeat", attrs...)
+		w.WriteHeader(http.StatusOK)
+	})
+}
+
+// respondDecodeError writes the response for a failed decodeValid and reports whether it did.
+func respondDecodeError(w http.ResponseWriter, problems map[string]string, err error) bool {
+	var tooBig *http.MaxBytesError
+	switch {
+	case len(problems) > 0:
+		encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
+	case errors.As(err, &tooBig):
+		encode(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
+	case err != nil:
+		encode(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+	default:
+		return false
+	}
+	return true
 }
 
 func handleHealthz() http.Handler {

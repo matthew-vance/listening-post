@@ -42,6 +42,11 @@ Add `"<station name>": "<hash>"` to `stations.json` and restart the gateway. Put
 
 ## Gateway
 
+Public routes (both require `Authorization: Bearer <token>`):
+
+- `POST /v1/events` — a batch of raw SBS-1 lines from the station's buffer.
+- `POST /v1/stations/heartbeat` — periodic station status: uptime, free disk, buffer depth, and optional diagnostics (see `heartbeatRequest` in `gateway/handlers.go`).
+
 | Variable        | Default         | Purpose                                  |
 |-----------------|-----------------|------------------------------------------|
 | `PORT`          | `8080`          | Public API (`/v1/*`)                     |
