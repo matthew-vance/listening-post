@@ -36,26 +36,33 @@ def ingest(
     batch_size: int,
     flush_after: timedelta,
 ) -> int:
-    """Commit every batch_size lines or flush_after since the last commit, whichever is first."""
-    written = pending = 0
+    """Write every batch_size lines or flush_after since the last write, whichever is first."""
+    # Rows are buffered in memory and written in one short transaction so the write lock is
+    # held for milliseconds per batch; an open transaction between commits would starve publish.
+    written = 0
+    pending: list[tuple[str, str]] = []
     last_flush = now()
+
+    def flush() -> None:
+        nonlocal written, last_flush
+        db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", pending)
+        db.commit()
+        written += len(pending)
+        log.info("committed %d events (%d total this connection)", len(pending), written)
+        pending.clear()
+        last_flush = now()
+
     try:
         for line in lines:
-            if pending and (pending >= batch_size or now() - last_flush >= flush_after):
-                db.commit()
-                log.info("committed %d events (%d total this connection)", pending, written)
-                pending = 0
-                last_flush = now()
+            if pending and (len(pending) >= batch_size or now() - last_flush >= flush_after):
+                flush()
             if not line:  # blank line or idle heartbeat from connect()
                 continue
-            db.execute("INSERT INTO events (ts, raw) VALUES (?, ?)", (now().isoformat(), line))
-            pending += 1
-            written += 1
+            pending.append((now().isoformat(), line))
             log.debug("event %s", line)
     finally:
-        db.commit()  # stream closed, error, or shutdown: never drop the pending batch
         if pending:
-            log.info("committed %d events (%d total this connection)", pending, written)
+            flush()  # stream closed, error, or shutdown: never drop the pending batch
     return written
 
 
