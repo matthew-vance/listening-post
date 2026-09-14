@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -80,7 +80,7 @@ func TestEventsPost(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			newServer(log.New(io.Discard, "", 0)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(tt.body)))
+			newServer(slog.New(slog.DiscardHandler)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(tt.body)))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())

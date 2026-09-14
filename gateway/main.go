@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -32,7 +32,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	logger := log.New(stderr, "", log.LstdFlags)
+	logger := slog.New(slog.NewTextHandler(stderr, nil))
 
 	r := &readiness{}
 	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger)}
@@ -41,7 +41,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {
 		go func() {
-			logger.Printf("%s listening on %s", name, srv.Addr)
+			logger.Info("listening", "server", name, "addr", srv.Addr)
 			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 				errc <- fmt.Errorf("%s: listen and serve: %w", name, err)
 			}
@@ -56,7 +56,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	case err = <-errc: // a dead listener must not leave us running and reporting ready
 	}
 	r.shuttingDown.Store(true)
-	logger.Print("shutting down")
+	logger.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 )
 
-func addRoutes(mux *http.ServeMux, logger *log.Logger) {
+func addRoutes(mux *http.ServeMux, logger *slog.Logger) {
 	mux.Handle("POST /v1/events", handleEventsPost(logger))
 }
 
