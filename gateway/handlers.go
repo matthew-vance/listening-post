@@ -79,16 +79,26 @@ func (r heartbeatRequest) Valid(_ context.Context) map[string]string {
 	return problems
 }
 
-func handleHeartbeatPost(logger *slog.Logger) http.Handler {
+// heartbeatSaver is the port handleHeartbeatPost writes through; heartbeatStore is the Postgres adapter.
+type heartbeatSaver interface {
+	Save(ctx context.Context, station string, receivedAt time.Time, hb heartbeatRequest) error
+}
+
+func handleHeartbeatPost(logger *slog.Logger, store heartbeatSaver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
 		req, problems, err := decodeValid[heartbeatRequest](r)
 		if respondDecodeError(w, problems, err) {
 			return
 		}
-		// ponytail: placeholder until heartbeats are stored somewhere.
+		station := stationFrom(r.Context())
+		if err := store.Save(r.Context(), station, time.Now(), req); err != nil {
+			logger.Error("save heartbeat", "station", station, "err", err)
+			encode(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
 		attrs := []any{
-			"station", stationFrom(r.Context()),
+			"station", station,
 			"uptime_s", req.UptimeSeconds,
 			"disk_free_bytes", req.DiskFreeBytes,
 			"buffer_depth", req.BufferDepth,
@@ -133,13 +143,19 @@ func handleHealthz() http.Handler {
 	})
 }
 
-func handleReadyz(r *readiness) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if r.ready.Load() && !r.shuttingDown.Load() {
-			encode(w, http.StatusOK, map[string]string{"status": "ok"})
+func handleReadyz(r *readiness, ping func(context.Context) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !r.ready.Load() || r.shuttingDown.Load() {
+			encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
-		encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		defer cancel()
+		if err := ping(ctx); err != nil {
+			encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "reason": "database"})
+			return
+		}
+		encode(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 }
 

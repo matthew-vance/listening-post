@@ -29,6 +29,7 @@ func main() {
 //	PORT           public API listener (default 8080)
 //	ADMIN_PORT     health/readiness listener, internal only (default 9091)
 //	STATIONS_FILE  JSON map of station name → sha256(token) hex (default stations.json)
+//	DATABASE_URL   Postgres connection URL (required; schema applied by `just migrate`)
 func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -41,9 +42,20 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	}
 	logger.Info("loaded stations", "count", len(reg))
 
+	dbURL := getenv("DATABASE_URL")
+	if dbURL == "" {
+		return errors.New("DATABASE_URL is not set")
+	}
+	pool, err := openDB(ctx, dbURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	logger.Info("connected to database")
+
 	r := &readiness{}
-	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, reg)}
-	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r)}
+	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, reg, &heartbeatStore{pool: pool})}
+	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r, pool.Ping)}
 
 	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {

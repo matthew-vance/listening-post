@@ -30,7 +30,7 @@ The SQLite file is the buffer between the two: it survives Pi reboots and gatewa
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`) behind Traefik, and currently just authenticates, validates, and logs incoming batches. Its health probes are on a separate admin port that only Traefik can reach.
+The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`) behind Traefik. It authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and (for now) only logs events. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks the database.
 
 Traefik is there to terminate TLS. The Let's Encrypt configuration is present in `compose.yaml` but commented out until there is a real hostname. **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
 
@@ -56,6 +56,7 @@ Public routes (both require `Authorization: Bearer <token>`):
 | `PORT`          | `8080`          | Public API (`/v1/*`)                     |
 | `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
 | `STATIONS_FILE` | `stations.json` | Station name → token hash registry       |
+| `DATABASE_URL`  | *(required)*    | Postgres connection URL                  |
 
 ### Database
 

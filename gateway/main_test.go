@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -25,6 +26,18 @@ const (
 func testRegistry() stationRegistry {
 	return stationRegistry{hashToken(testToken): "dev"}
 }
+
+// saverFunc adapts a func to heartbeatSaver, for the one case real Postgres can't produce on demand: a failing save.
+type saverFunc func(ctx context.Context, station string, receivedAt time.Time, hb heartbeatRequest) error
+
+func (f saverFunc) Save(ctx context.Context, station string, receivedAt time.Time, hb heartbeatRequest) error {
+	return f(ctx, station, receivedAt, hb)
+}
+
+var (
+	noopSaver = saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return nil })
+	pingOK    = func(context.Context) error { return nil }
+)
 
 func TestLoadStations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "stations.json")
@@ -88,7 +101,7 @@ func TestBearerAuth(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newAdminServer(&readiness{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newAdminServer(&readiness{}, pingOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -102,15 +115,18 @@ func TestHealthz(t *testing.T) {
 }
 
 func TestReadyz(t *testing.T) {
+	pingFail := func(context.Context) error { return errors.New("connection refused") }
 	tests := []struct {
 		name                string
 		ready, shuttingDown bool
+		ping                func(context.Context) error
 		wantCode            int
 		wantBody            string
 	}{
-		{"not ready", false, false, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
-		{"ready", true, false, http.StatusOK, "{\"status\":\"ok\"}\n"},
-		{"shutting down", true, true, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
+		{"not ready", false, false, pingOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
+		{"ready", true, false, pingOK, http.StatusOK, "{\"status\":\"ok\"}\n"},
+		{"shutting down", true, true, pingOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
+		{"database down", true, false, pingFail, http.StatusServiceUnavailable, "{\"reason\":\"database\",\"status\":\"unavailable\"}\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,7 +135,7 @@ func TestReadyz(t *testing.T) {
 			r.shuttingDown.Store(tt.shuttingDown)
 
 			rec := httptest.NewRecorder()
-			newAdminServer(r).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			newAdminServer(r, tt.ping).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -154,7 +170,7 @@ func TestEventsPost(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), testRegistry()).ServeHTTP(rec, req)
+			newServer(slog.New(slog.DiscardHandler), testRegistry(), noopSaver).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -194,6 +210,8 @@ func TestHeartbeatPost(t *testing.T) {
 		{"negative buffer_depth", testToken, `{"reported_at":"2026-09-14T14:00:00Z","uptime_seconds":1,"disk_free_bytes":1,"buffer_depth":-1}`, http.StatusUnprocessableEntity, "buffer_depth"},
 		{"negative event_rate", testToken, `{` + required + `,"event_rate":-1}`, http.StatusUnprocessableEntity, "event_rate"},
 	}
+	pool := testPool(t)
+	store := &heartbeatStore{pool: pool}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/stations/heartbeat", strings.NewReader(tt.body))
@@ -201,7 +219,7 @@ func TestHeartbeatPost(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), testRegistry()).ServeHTTP(rec, req)
+			newServer(slog.New(slog.DiscardHandler), testRegistry(), store).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -220,11 +238,31 @@ func TestHeartbeatPost(t *testing.T) {
 			}
 		})
 	}
+
+	var stored int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM heartbeats WHERE station_id = 'dev'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 { // three 200s share one reported_at, so one row
+		t.Fatalf("stored heartbeats = %d, want 1", stored)
+	}
+
+	t.Run("store failure", func(t *testing.T) {
+		failing := saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return errors.New("boom") })
+		req := httptest.NewRequest(http.MethodPost, "/v1/stations/heartbeat", strings.NewReader(`{`+required+`}`))
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		newServer(slog.New(slog.DiscardHandler), testRegistry(), failing).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+		}
+	})
 }
 
 func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
-	stations := writeStations(t)
+	stations, dbURL := writeStations(t), testDB(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
@@ -233,6 +271,8 @@ func TestRun(t *testing.T) {
 			return adminPort
 		case "STATIONS_FILE":
 			return stations
+		case "DATABASE_URL":
+			return dbURL
 		}
 		return ""
 	}
@@ -274,13 +314,15 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	stations := writeStations(t)
+	stations, dbURL := writeStations(t), testDB(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
 			return taken
 		case "STATIONS_FILE":
 			return stations
+		case "DATABASE_URL":
+			return dbURL
 		}
 		return freePort(t)
 	}
