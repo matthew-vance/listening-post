@@ -86,10 +86,6 @@ def connect(host: str, port: int, idle_timeout: float) -> Iterator[str]:
                 yield line.decode(errors="replace").rstrip("\r")
 
 
-def utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -105,7 +101,7 @@ def main() -> None:
         while True:
             try:
                 lines = connect(host, port, idle_timeout=flush_after.total_seconds())
-                written = ingest(lines, db, utcnow, batch_size=batch_size, flush_after=flush_after)
+                written = ingest(lines, db, lambda: datetime.now(UTC), batch_size=batch_size, flush_after=flush_after)
                 log.warning("stream closed after %d events", written)
             except OSError as e:
                 log.warning("connection failed: %s", e)
