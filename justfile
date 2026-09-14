@@ -1,3 +1,5 @@
+set dotenv-load
+
 # Bring up the stack
 up:
     docker compose up -d --build

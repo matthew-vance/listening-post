@@ -33,7 +33,7 @@ Each publisher authenticates with a bearer token. The gateway stores only SHA-25
 just token            # prints a fresh token and its hash
 ```
 
-Add `"<station name>": "<hash>"` to `stations.json` and restart the gateway. Set `STATION_TOKEN=<token>` on the Pi. Revoke a station by removing its line.
+Add `"<station name>": "<hash>"` to `stations.json` and restart the gateway. Put `STATION_TOKEN=<token>` in `.env` (see `.env.example`; gitignored) — `just` loads it automatically, so `just publish` picks it up. Revoke a station by removing its line.
 
 ## Gateway
 
