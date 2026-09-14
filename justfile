@@ -39,12 +39,27 @@ publish:
 heartbeat:
     python3 heartbeat.py
 
-# Mint a station token; add the hash to stations.json, give the token to the station
-token:
-    #!/usr/bin/env sh
-    token=$(openssl rand -hex 32)
-    echo "token: $token"
-    echo "hash:  $(printf %s "$token" | openssl dgst -sha256 | awk '{print $NF}')"
+# Register a station and mint its first token (see scripts/stations.sh)
+station-add name:
+    scripts/stations.sh add {{quote(name)}}
+
+# Mint an additional token for rotation
+station-token-add name:
+    scripts/stations.sh token-add {{quote(name)}}
+
+# Revoke one token by hash prefix (see station-tokens)
+station-token-revoke name prefix:
+    scripts/stations.sh token-revoke {{quote(name)}} {{quote(prefix)}}
+
+station-tokens name:
+    scripts/stations.sh tokens {{quote(name)}}
+
+# Revoke a station and every token (soft: rows and heartbeats remain)
+station-revoke name:
+    scripts/stations.sh revoke {{quote(name)}}
+
+station-list:
+    scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
 test: test-gateway test-ingest test-publish test-heartbeat

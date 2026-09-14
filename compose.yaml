@@ -42,10 +42,7 @@ services:
     build: ./gateway
     restart: unless-stopped
     environment:
-      STATIONS_FILE: /stations.json
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/listening_post
-    volumes:
-      - ./stations.json:/stations.json:ro
     depends_on:
       postgres:
         condition: service_healthy

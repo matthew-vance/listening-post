@@ -10,12 +10,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const (
@@ -23,8 +23,39 @@ const (
 	testToken   = "test-token"
 )
 
-func testRegistry() stationRegistry {
-	return stationRegistry{hashToken(testToken): "dev"}
+// testStations returns a station store on a fresh DB with "dev" registered under testToken, plus the DB URL.
+func testStations(t *testing.T) (*stationStore, string) {
+	t.Helper()
+	url := testDB(t)
+	pool, err := pgxpool.New(t.Context(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	insertStation(t, pool, "dev", testToken)
+	return &stationStore{pool: pool}, url
+}
+
+func insertStation(t *testing.T, pool *pgxpool.Pool, id, token string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), "INSERT INTO stations (id) VALUES ($1)", id); err != nil {
+		t.Fatal(err)
+	}
+	insertToken(t, pool, id, token)
+}
+
+func insertToken(t *testing.T, pool *pgxpool.Pool, id, token string) {
+	t.Helper()
+	if _, err := pool.Exec(t.Context(), "INSERT INTO station_tokens (token_hash, station_id) VALUES ($1, $2)", hashToken(token), id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// lookupFunc adapts a func to stationLookup, for the one case real Postgres can't produce on demand: a failing lookup.
+type lookupFunc func(ctx context.Context, token string) (string, bool, error)
+
+func (f lookupFunc) Lookup(ctx context.Context, token string) (string, bool, error) {
+	return f(ctx, token)
 }
 
 // saverFunc adapts a func to heartbeatSaver, for the one case real Postgres can't produce on demand: a failing save.
@@ -39,25 +70,43 @@ var (
 	pingOK    = func(context.Context) error { return nil }
 )
 
-func TestLoadStations(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "stations.json")
-	if err := os.WriteFile(path, []byte(`{"dev": "`+hashToken(testToken)+`"}`), 0o600); err != nil {
-		t.Fatal(err)
+func TestStationStoreLookup(t *testing.T) {
+	stations, _ := testStations(t)
+	ctx := t.Context()
+	resolves := func(token string) bool {
+		t.Helper()
+		station, ok, err := stations.Lookup(ctx, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok && station != "dev" {
+			t.Fatalf("token resolved to %q, want dev", station)
+		}
+		return ok
 	}
 
-	reg, err := loadStations(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if station, ok := reg.lookup(testToken); !ok || station != "dev" {
-		t.Fatalf("lookup = %q, %v; want dev, true", station, ok)
-	}
-	if _, ok := reg.lookup("nope"); ok {
-		t.Fatal("unknown token resolved to a station")
+	if !resolves(testToken) || resolves("nope") {
+		t.Fatal("initial: want testToken valid, nope invalid")
 	}
 
-	if _, err := loadStations(filepath.Join(t.TempDir(), "missing.json")); err == nil {
-		t.Fatal("missing file: want error")
+	// rotation: add a second token, both work; revoke the first, only the second works
+	insertToken(t, stations.pool, "dev", "second-token")
+	if !resolves(testToken) || !resolves("second-token") {
+		t.Fatal("after adding a token: want both valid")
+	}
+	if _, err := stations.pool.Exec(ctx, "UPDATE station_tokens SET revoked_at = now() WHERE token_hash = $1", hashToken(testToken)); err != nil {
+		t.Fatal(err)
+	}
+	if resolves(testToken) || !resolves("second-token") {
+		t.Fatal("after revoking first token: want only second valid")
+	}
+
+	// station kill switch
+	if _, err := stations.pool.Exec(ctx, "UPDATE stations SET revoked_at = now() WHERE id = 'dev'"); err != nil {
+		t.Fatal(err)
+	}
+	if resolves("second-token") {
+		t.Fatal("after revoking station: want no token valid")
 	}
 }
 
@@ -65,17 +114,20 @@ func TestBearerAuth(t *testing.T) {
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(stationFrom(r.Context())))
 	})
-	h := bearerAuth(testRegistry())(echo)
+	stations, _ := testStations(t)
+	failing := lookupFunc(func(context.Context, string) (string, bool, error) { return "", false, errors.New("boom") })
 
 	tests := []struct {
 		name, header string
+		stations     stationLookup
 		wantCode     int
 		wantBody     string
 	}{
-		{"no header", "", http.StatusUnauthorized, ""},
-		{"wrong scheme", "Basic dGVzdA==", http.StatusUnauthorized, ""},
-		{"unknown token", "Bearer nope", http.StatusUnauthorized, ""},
-		{"valid", "Bearer " + testToken, http.StatusOK, "dev"},
+		{"no header", "", stations, http.StatusUnauthorized, ""},
+		{"wrong scheme", "Basic dGVzdA==", stations, http.StatusUnauthorized, ""},
+		{"unknown token", "Bearer nope", stations, http.StatusUnauthorized, ""},
+		{"valid", "Bearer " + testToken, stations, http.StatusOK, "dev"},
+		{"store error", "Bearer " + testToken, failing, http.StatusInternalServerError, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -84,7 +136,7 @@ func TestBearerAuth(t *testing.T) {
 				req.Header.Set("Authorization", tt.header)
 			}
 			rec := httptest.NewRecorder()
-			h.ServeHTTP(rec, req)
+			bearerAuth(slog.New(slog.DiscardHandler), tt.stations)(echo).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -148,6 +200,7 @@ func TestReadyz(t *testing.T) {
 }
 
 func TestEventsPost(t *testing.T) {
+	stations, _ := testStations(t)
 	tests := []struct {
 		name        string
 		token       string
@@ -170,7 +223,7 @@ func TestEventsPost(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), testRegistry(), noopSaver).ServeHTTP(rec, req)
+			newServer(slog.New(slog.DiscardHandler), stations, noopSaver).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -210,7 +263,8 @@ func TestHeartbeatPost(t *testing.T) {
 		{"negative buffer_depth", testToken, `{"reported_at":"2026-09-14T14:00:00Z","uptime_seconds":1,"disk_free_bytes":1,"buffer_depth":-1}`, http.StatusUnprocessableEntity, "buffer_depth"},
 		{"negative event_rate", testToken, `{` + required + `,"event_rate":-1}`, http.StatusUnprocessableEntity, "event_rate"},
 	}
-	pool := testPool(t)
+	stations, _ := testStations(t)
+	pool := stations.pool
 	store := &heartbeatStore{pool: pool}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -219,7 +273,7 @@ func TestHeartbeatPost(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), testRegistry(), store).ServeHTTP(rec, req)
+			newServer(slog.New(slog.DiscardHandler), stations, store).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -252,7 +306,7 @@ func TestHeartbeatPost(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/stations/heartbeat", strings.NewReader(`{`+required+`}`))
 		req.Header.Set("Authorization", "Bearer "+testToken)
 		rec := httptest.NewRecorder()
-		newServer(slog.New(slog.DiscardHandler), testRegistry(), failing).ServeHTTP(rec, req)
+		newServer(slog.New(slog.DiscardHandler), stations, failing).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -262,15 +316,13 @@ func TestHeartbeatPost(t *testing.T) {
 
 func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
-	stations, dbURL := writeStations(t), testDB(t)
+	_, dbURL := testStations(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
 			return publicPort
 		case "ADMIN_PORT":
 			return adminPort
-		case "STATIONS_FILE":
-			return stations
 		case "DATABASE_URL":
 			return dbURL
 		}
@@ -314,13 +366,11 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	stations, dbURL := writeStations(t), testDB(t)
+	_, dbURL := testStations(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
 			return taken
-		case "STATIONS_FILE":
-			return stations
 		case "DATABASE_URL":
 			return dbURL
 		}
@@ -338,15 +388,6 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	case <-time.After(6 * time.Second):
 		t.Fatal("run did not return after listen failure")
 	}
-}
-
-func writeStations(t *testing.T) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "stations.json")
-	if err := os.WriteFile(path, []byte(`{"dev": "`+hashToken(testToken)+`"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 func statusOf(t *testing.T, method, url, body, token string) int {

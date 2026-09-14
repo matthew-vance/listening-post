@@ -1,43 +1,39 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// stationRegistry maps hex(sha256(token)) to the station it authorizes.
-type stationRegistry map[string]string
+// stationStore resolves bearer tokens against the station_tokens/stations tables.
+type stationStore struct {
+	pool *pgxpool.Pool
+}
 
-// loadStations reads {"<station>": "<sha256 hex>", ...} and inverts it for lookup by token.
-func loadStations(path string) (stationRegistry, error) {
-	data, err := os.ReadFile(path)
+// Lookup returns the station a token authorizes. ok is false when the token is unknown, revoked, or belongs to a
+// revoked station; err only for DB failure.
+// ponytail: one query per authenticated request; cache by hash if it ever shows up in profiles.
+func (s *stationStore) Lookup(ctx context.Context, token string) (station string, ok bool, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT s.id FROM station_tokens t JOIN stations s ON s.id = t.station_id
+		WHERE t.token_hash = $1 AND t.revoked_at IS NULL AND s.revoked_at IS NULL`, hashToken(token),
+	).Scan(&station)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
 	if err != nil {
-		return nil, fmt.Errorf("read stations file: %w", err)
+		return "", false, fmt.Errorf("lookup station: %w", err)
 	}
-	var byStation map[string]string
-	if err := json.Unmarshal(data, &byStation); err != nil {
-		return nil, fmt.Errorf("parse stations file %s: %w", path, err)
-	}
-	reg := make(stationRegistry, len(byStation))
-	for station, hash := range byStation {
-		if other, dup := reg[hash]; dup {
-			return nil, fmt.Errorf("stations %q and %q share a token hash", other, station)
-		}
-		reg[hash] = station
-	}
-	return reg, nil
+	return station, true, nil
 }
 
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
-}
-
-// lookup keys by hash, so timing reveals nothing about the token itself.
-func (s stationRegistry) lookup(token string) (station string, ok bool) {
-	station, ok = s[hashToken(token)]
-	return station, ok
 }

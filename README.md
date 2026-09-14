@@ -36,13 +36,26 @@ Traefik is there to terminate TLS. The Let's Encrypt configuration is present in
 
 ### Registering a station
 
-Each publisher authenticates with a bearer token. The gateway stores only SHA-256 hashes, in `stations.json` (see `stations.example.json`; the real file is gitignored).
+Each publisher authenticates with a bearer token. A station can have several tokens at once; the gateway stores only their SHA-256 hashes (`stations`, `station_tokens`).
 
 ```sh
-just token            # prints a fresh token and its hash
+just station-add pi-shed      # registers the station, prints STATION_TOKEN=...
+just station-list
+just station-revoke pi-shed   # kills every token; soft: rows and heartbeats remain
 ```
 
-Add `"<station name>": "<hash>"` to `stations.json` and restart the gateway. Put `STATION_TOKEN=<token>` in `.env` (see `.env.example`; gitignored) — `just` loads it automatically, so `just publish` picks it up. Revoke a station by removing its line.
+Put `STATION_TOKEN=<token>` in the Pi's `.env` (see `.env.example`; gitignored) — `just` loads it automatically, so `just publish` and `just heartbeat` pick it up. None of this needs a gateway restart.
+
+#### Rotating a token
+
+Rotation is add → switch → revoke, so the station never sees a 401:
+
+```sh
+just station-token-add pi-shed                 # prints a new STATION_TOKEN; the old one still works
+# update the Pi's .env, restart publish and heartbeat, confirm station=pi-shed still appears in the gateway log
+just station-tokens pi-shed                    # hash prefixes with created/revoked times
+just station-token-revoke pi-shed <old prefix>
+```
 
 ## Gateway
 
@@ -55,12 +68,11 @@ Public routes (both require `Authorization: Bearer <token>`):
 |-----------------|-----------------|------------------------------------------|
 | `PORT`          | `8080`          | Public API (`/v1/*`)                     |
 | `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
-| `STATIONS_FILE` | `stations.json` | Station name → token hash registry       |
 | `DATABASE_URL`  | *(required)*    | Postgres connection URL                  |
 
 ### Database
 
-Postgres runs as a compose service and is shared by every server-side service, so the schema is owned by the repo, not by any one service: migrations live in `db/migrations/` in [goose](https://github.com/pressly/goose) SQL format, in a single sequence, and are applied out-of-band — never by a service at startup:
+Postgres runs as a compose service and is shared by every server-side service, so the schema is owned by the repo, not by any one service. It holds the station registry (`stations`, `station_tokens`) and heartbeat history (`heartbeats`). migrations live in `db/migrations/` in [goose](https://github.com/pressly/goose) SQL format, in a single sequence, and are applied out-of-band — never by a service at startup:
 
 ```sh
 just migrate          # apply pending (just up runs this for you, after postgres is healthy)
@@ -100,7 +112,7 @@ Batching keeps SD card writes down; on power loss at most one batch is lost. A n
 |-----------------|--------------------|----------------------------------------------|
 | `DB_PATH`       | `../events.db`     | SQLite buffer file (same file ingest writes) |
 | `GATEWAY_URL`   | `http://localhost` | Gateway base URL (Traefik entrypoint)        |
-| `STATION_TOKEN` | *(required)*       | Bearer token minted with `just token`        |
+| `STATION_TOKEN` | *(required)*       | Bearer token from `just station-add`         |
 | `BATCH_SIZE`    | `500`              | Events per POST                              |
 | `POLL_SECONDS`  | `2`                | Sleep when the buffer is empty               |
 | `RETRY_SECONDS` | `5`                | Sleep after a failed POST                    |
@@ -114,7 +126,7 @@ Rows are deleted from the buffer only after the gateway returns 2xx, so delivery
 |--------------------|--------------------|---------------------------------------------|
 | `DB_PATH`          | `../events.db`     | SQLite buffer file (opened read-only)       |
 | `GATEWAY_URL`      | `http://localhost` | Gateway base URL (Traefik entrypoint)       |
-| `STATION_TOKEN`    | *(required)*       | Bearer token minted with `just token`       |
+| `STATION_TOKEN`    | *(required)*       | Bearer token from `just station-add`        |
 | `INTERVAL_SECONDS` | `60`               | Seconds between reports                     |
 | `LOG_LEVEL`        | `INFO`             | Logs each report                            |
 

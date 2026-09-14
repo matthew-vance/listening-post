@@ -6,9 +6,10 @@ import (
 	"net/http"
 )
 
-func addRoutes(mux *http.ServeMux, logger *slog.Logger, reg stationRegistry, store heartbeatSaver) {
-	mux.Handle("POST /v1/events", bearerAuth(reg)(handleEventsPost(logger)))
-	mux.Handle("POST /v1/stations/heartbeat", bearerAuth(reg)(handleHeartbeatPost(logger, store)))
+func addRoutes(mux *http.ServeMux, logger *slog.Logger, stations stationLookup, store heartbeatSaver) {
+	auth := bearerAuth(logger, stations)
+	mux.Handle("POST /v1/events", auth(handleEventsPost(logger)))
+	mux.Handle("POST /v1/stations/heartbeat", auth(handleHeartbeatPost(logger, store)))
 }
 
 func addAdminRoutes(mux *http.ServeMux, r *readiness, ping func(context.Context) error) {
