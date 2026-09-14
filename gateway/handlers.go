@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -33,16 +35,29 @@ func (r eventsRequest) Valid(_ context.Context) map[string]string {
 	return problems
 }
 
-func handleEventsPost(logger *slog.Logger) http.Handler {
+// eventPublisher is the port handleEventsPost writes through; kafkaPublisher is the adapter.
+type eventPublisher interface {
+	Publish(ctx context.Context, station string, receivedAt time.Time, events []event) error
+}
+
+func handleEventsPost(logger *slog.Logger, pub eventPublisher) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		req, problems, err := decodeValid[eventsRequest](r)
 		if respondDecodeError(w, problems, err) {
 			return
 		}
-		// ponytail: placeholder until events are stored/forwarded somewhere.
+		station := stationFrom(r.Context())
+		// publish.py gives up after 10s; answer well inside that so a slow broker reads as our 500, not its timeout
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := pub.Publish(ctx, station, time.Now(), req.Events); err != nil {
+			logger.Error("publish events", "station", station, "count", len(req.Events), "err", err)
+			encode(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
 		first, last := req.Events[0], req.Events[len(req.Events)-1]
-		logger.Info("received events", "station", stationFrom(r.Context()), "count", len(req.Events), "first_id", first.ID, "last_id", last.ID)
+		logger.Info("published events", "station", station, "count", len(req.Events), "first_id", first.ID, "last_id", last.ID)
 		w.WriteHeader(http.StatusOK)
 	})
 }
@@ -143,7 +158,8 @@ func handleHealthz() http.Handler {
 	})
 }
 
-func handleReadyz(r *readiness, ping func(context.Context) error) http.Handler {
+// handleReadyz reports ready only when every named dependency check passes; the first failure names the reason.
+func handleReadyz(r *readiness, checks map[string]func(context.Context) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if !r.ready.Load() || r.shuttingDown.Load() {
 			encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
@@ -151,9 +167,11 @@ func handleReadyz(r *readiness, ping func(context.Context) error) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
 		defer cancel()
-		if err := ping(ctx); err != nil {
-			encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "reason": "database"})
-			return
+		for _, name := range slices.Sorted(maps.Keys(checks)) {
+			if err := checks[name](ctx); err != nil {
+				encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "reason": name})
+				return
+			}
 		}
 		encode(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

@@ -40,7 +40,14 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "connection string:", err)
 		os.Exit(1)
 	}
+	kafka, err := startKafka(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "start kafka container:", err)
+		_ = testcontainers.TerminateContainer(pg)
+		os.Exit(1)
+	}
 	code := m.Run()
+	_ = testcontainers.TerminateContainer(kafka)
 	_ = testcontainers.TerminateContainer(pg)
 	os.Exit(code)
 }

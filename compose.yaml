@@ -43,9 +43,12 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/listening_post
+      KAFKA_BROKERS: kafka:9092
     depends_on:
       postgres:
         condition: service_healthy
+      kafka-init: # the topic must exist before we produce: auto-create is off
+        condition: service_completed_successfully
     labels:
       traefik.enable: "true"
       traefik.http.routers.gateway.rule: PathPrefix(`/v1`)

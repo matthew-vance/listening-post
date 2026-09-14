@@ -14,7 +14,7 @@ flowchart LR
     subgraph server [Server]
         traefik --> gateway
         gateway --> postgres[(postgres)]
-        gateway -. "events.raw (next)" .-> kafka[(kafka)]
+        gateway -- "events.raw" --> kafka[(kafka)]
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -31,7 +31,7 @@ The SQLite file is the buffer between the two: it survives Pi reboots and gatewa
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`) behind Traefik. It authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and (for now) only logs events. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks the database.
+The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`) behind Traefik. It authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
 
 Traefik is there to terminate TLS. The Let's Encrypt configuration is present in `compose.yaml` but commented out until there is a real hostname. **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
 
@@ -72,6 +72,8 @@ Public routes (both require `Authorization: Bearer <token>`):
 | `PORT`          | `8080`          | Public API (`/v1/*`)                     |
 | `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
 | `DATABASE_URL`  | *(required)*    | Postgres connection URL                  |
+| `KAFKA_BROKERS` | *(required)*    | Comma-separated bootstrap brokers        |
+| `KAFKA_TOPIC`   | `events.raw`    | Topic events are published to            |
 
 ### Database
 
@@ -87,7 +89,9 @@ The goose CLI is pinned in `db/go.mod` via the `tool` directive, so `go tool goo
 
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created; today that's `events.raw` (3 partitions). The gateway does not publish to it yet.
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created; today that's `events.raw` (3 partitions).
+
+The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}`. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
 
 - `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
 - Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.

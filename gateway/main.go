@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -29,6 +30,8 @@ func main() {
 //	PORT           public API listener (default 8080)
 //	ADMIN_PORT     health/readiness listener, internal only (default 9091)
 //	DATABASE_URL   Postgres connection URL (required; schema applied by `just migrate`)
+//	KAFKA_BROKERS  comma-separated bootstrap brokers (required)
+//	KAFKA_TOPIC    topic events are published to (default events.raw)
 func run(ctx context.Context, getenv func(string) string, stderr io.Writer) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -46,9 +49,23 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	defer pool.Close()
 	logger.Info("connected to database")
 
+	brokers := getenv("KAFKA_BROKERS")
+	if brokers == "" {
+		return errors.New("KAFKA_BROKERS is not set")
+	}
+	kafka, err := openKafka(ctx, strings.Split(brokers, ","))
+	if err != nil {
+		return err
+	}
+	defer kafka.Close() // after the servers drain: flushes anything still in flight
+	logger.Info("connected to kafka")
+
+	pub := &kafkaPublisher{client: kafka, topic: cmp.Or(getenv("KAFKA_TOPIC"), "events.raw")}
+	checks := map[string]func(context.Context) error{"database": pool.Ping, "kafka": kafka.Ping}
+
 	r := &readiness{}
-	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool})}
-	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r, pool.Ping)}
+	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool}, pub)}
+	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r, checks)}
 
 	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {

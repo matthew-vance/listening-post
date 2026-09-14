@@ -69,9 +69,18 @@ func (f saverFunc) Save(ctx context.Context, station string, receivedAt time.Tim
 	return f(ctx, station, receivedAt, hb)
 }
 
+// publisherFunc adapts a func to eventPublisher, for the one case a real broker can't produce on demand: a failing publish.
+type publisherFunc func(ctx context.Context, station string, receivedAt time.Time, events []event) error
+
+func (f publisherFunc) Publish(ctx context.Context, station string, receivedAt time.Time, events []event) error {
+	return f(ctx, station, receivedAt, events)
+}
+
 var (
-	noopSaver = saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return nil })
-	pingOK    = func(context.Context) error { return nil }
+	noopSaver     = saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return nil })
+	noopPublisher = publisherFunc(func(context.Context, string, time.Time, []event) error { return nil })
+	pingOK        = func(context.Context) error { return nil }
+	allOK         = map[string]func(context.Context) error{"database": pingOK, "kafka": pingOK}
 )
 
 func TestStationStoreLookup(t *testing.T) {
@@ -157,7 +166,7 @@ func TestBearerAuth(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newAdminServer(&readiness{}, pingOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newAdminServer(&readiness{}, allOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -172,17 +181,20 @@ func TestHealthz(t *testing.T) {
 
 func TestReadyz(t *testing.T) {
 	pingFail := func(context.Context) error { return errors.New("connection refused") }
+	dbDown := map[string]func(context.Context) error{"database": pingFail, "kafka": pingOK}
+	kafkaDown := map[string]func(context.Context) error{"database": pingOK, "kafka": pingFail}
 	tests := []struct {
 		name                string
 		ready, shuttingDown bool
-		ping                func(context.Context) error
+		checks              map[string]func(context.Context) error
 		wantCode            int
 		wantBody            string
 	}{
-		{"not ready", false, false, pingOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
-		{"ready", true, false, pingOK, http.StatusOK, "{\"status\":\"ok\"}\n"},
-		{"shutting down", true, true, pingOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
-		{"database down", true, false, pingFail, http.StatusServiceUnavailable, "{\"reason\":\"database\",\"status\":\"unavailable\"}\n"},
+		{"not ready", false, false, allOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
+		{"ready", true, false, allOK, http.StatusOK, "{\"status\":\"ok\"}\n"},
+		{"shutting down", true, true, allOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
+		{"database down", true, false, dbDown, http.StatusServiceUnavailable, "{\"reason\":\"database\",\"status\":\"unavailable\"}\n"},
+		{"kafka down", true, false, kafkaDown, http.StatusServiceUnavailable, "{\"reason\":\"kafka\",\"status\":\"unavailable\"}\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -191,7 +203,7 @@ func TestReadyz(t *testing.T) {
 			r.shuttingDown.Store(tt.shuttingDown)
 
 			rec := httptest.NewRecorder()
-			newAdminServer(r, tt.ping).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			newAdminServer(r, tt.checks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -204,7 +216,14 @@ func TestReadyz(t *testing.T) {
 }
 
 func TestEventsPost(t *testing.T) {
-	stations, _, _ := testStations(t)
+	stations, id, _ := testStations(t)
+	topic := testTopic(t)
+	client, err := openKafka(t.Context(), kafkaBrokers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	pub := &kafkaPublisher{client: client, topic: topic}
 	tests := []struct {
 		name        string
 		token       string
@@ -227,7 +246,7 @@ func TestEventsPost(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), stations, noopSaver).ServeHTTP(rec, req)
+			newServer(slog.New(slog.DiscardHandler), stations, noopSaver, pub).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -246,6 +265,24 @@ func TestEventsPost(t *testing.T) {
 			}
 		})
 	}
+
+	// the one 200 above produced exactly one record, keyed by the station
+	rec := consume(t, topic, 1)[0]
+	if string(rec.Key) != id || !strings.Contains(string(rec.Value), `"raw":"MSG,3,1,1,ABC123,1"`) {
+		t.Fatalf("record key=%q value=%s", rec.Key, rec.Value)
+	}
+
+	t.Run("publish failure", func(t *testing.T) {
+		failing := publisherFunc(func(context.Context, string, time.Time, []event) error { return errors.New("boom") })
+		req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(validEvents))
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		newServer(slog.New(slog.DiscardHandler), stations, noopSaver, failing).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+		}
+	})
 }
 
 func TestHeartbeatPost(t *testing.T) {
@@ -277,7 +314,7 @@ func TestHeartbeatPost(t *testing.T) {
 				req.Header.Set("Authorization", "Bearer "+tt.token)
 			}
 			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), stations, store).ServeHTTP(rec, req)
+			newServer(slog.New(slog.DiscardHandler), stations, store, noopPublisher).ServeHTTP(rec, req)
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
@@ -310,7 +347,7 @@ func TestHeartbeatPost(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/stations/heartbeat", strings.NewReader(`{`+required+`}`))
 		req.Header.Set("Authorization", "Bearer "+testToken)
 		rec := httptest.NewRecorder()
-		newServer(slog.New(slog.DiscardHandler), stations, failing).ServeHTTP(rec, req)
+		newServer(slog.New(slog.DiscardHandler), stations, failing, noopPublisher).ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
@@ -321,6 +358,7 @@ func TestHeartbeatPost(t *testing.T) {
 func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
 	_, _, dbURL := testStations(t)
+	topic := testTopic(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
@@ -329,6 +367,10 @@ func TestRun(t *testing.T) {
 			return adminPort
 		case "DATABASE_URL":
 			return dbURL
+		case "KAFKA_BROKERS":
+			return strings.Join(kafkaBrokers, ",")
+		case "KAFKA_TOPIC":
+			return topic
 		}
 		return ""
 	}
@@ -377,6 +419,8 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 			return taken
 		case "DATABASE_URL":
 			return dbURL
+		case "KAFKA_BROKERS":
+			return strings.Join(kafkaBrokers, ",")
 		}
 		return freePort(t)
 	}
