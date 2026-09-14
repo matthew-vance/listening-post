@@ -70,12 +70,12 @@ func handleReadyz(r *readiness) http.Handler {
 	})
 }
 
-// Validator reports semantic problems with an already-decoded request, keyed by field.
-type Validator interface {
+// validator reports semantic problems with an already-decoded request, keyed by field.
+type validator interface {
 	Valid(ctx context.Context) (problems map[string]string)
 }
 
-func decodeValid[T Validator](r *http.Request) (T, map[string]string, error) {
+func decodeValid[T validator](r *http.Request) (T, map[string]string, error) {
 	var v T
 	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
 		return v, nil, fmt.Errorf("decode json: %w", err)

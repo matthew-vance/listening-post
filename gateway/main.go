@@ -35,8 +35,8 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	logger := log.New(stderr, "", log.LstdFlags)
 
 	r := &readiness{}
-	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: NewServer(logger)}
-	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: NewAdminServer(r)}
+	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger)}
+	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r)}
 
 	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {
