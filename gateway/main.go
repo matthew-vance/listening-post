@@ -45,23 +45,28 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	public := &http.Server{Addr: ":" + envOr("PORT", "8080"), Handler: NewServer(logger)}
 	admin := &http.Server{Addr: ":" + envOr("ADMIN_PORT", "9091"), Handler: NewAdminServer(r)}
 
+	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {
 		go func() {
 			logger.Printf("%s listening on %s", name, srv.Addr)
 			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-				logger.Printf("%s: error listening and serving: %s", name, err)
+				errc <- fmt.Errorf("%s: listen and serve: %w", name, err)
 			}
 		}()
 	}
 	// ponytail: nothing to wait on yet; flip this after downstream deps connect.
 	r.ready.Store(true)
 
-	<-ctx.Done()
+	var err error
+	select {
+	case <-ctx.Done():
+	case err = <-errc: // a dead listener must not leave us running and reporting ready
+	}
 	r.shuttingDown.Store(true)
 	logger.Print("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Drain public first so /readyz reports 503 to probes for the whole drain window.
-	return errors.Join(public.Shutdown(shutdownCtx), admin.Shutdown(shutdownCtx))
+	return errors.Join(err, public.Shutdown(shutdownCtx), admin.Shutdown(shutdownCtx))
 }

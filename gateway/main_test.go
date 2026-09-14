@@ -141,6 +141,34 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunReturnsWhenListenFails(t *testing.T) {
+	// Wildcard bind: macOS lets ":port" coexist with "localhost:port" via SO_REUSEADDR.
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	getenv := func(key string) string {
+		if key == "PORT" {
+			return taken
+		}
+		return freePort(t)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- run(t.Context(), getenv, io.Discard) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("run returned nil, want listen error")
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("run did not return after listen failure")
+	}
+}
+
 func statusOf(t *testing.T, method, url, body string) int {
 	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))
