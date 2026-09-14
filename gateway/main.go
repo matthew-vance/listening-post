@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -67,22 +68,27 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool}, pub)}
 	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r, checks)}
 
+	// Bind synchronously so a taken port fails run() outright and ready is only set once both listeners exist.
 	errc := make(chan error, 2)
 	for name, srv := range map[string]*http.Server{"public": public, "admin": admin} {
+		ln, err := net.Listen("tcp", srv.Addr)
+		if err != nil {
+			return fmt.Errorf("%s: listen: %w", name, err)
+		}
+		logger.Info("listening", "server", name, "addr", srv.Addr)
 		go func() {
-			logger.Info("listening", "server", name, "addr", srv.Addr)
-			if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-				errc <- fmt.Errorf("%s: listen and serve: %w", name, err)
+			if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+				errc <- fmt.Errorf("%s: serve: %w", name, err)
 			}
 		}()
 	}
-	// ponytail: nothing to wait on yet; flip this after downstream deps connect.
+	// Dependencies pinged, listeners bound: ready means what it says. Ongoing health is the checks in /readyz.
 	r.ready.Store(true)
 
-	var listenErr error
+	var serveErr error
 	select {
 	case <-ctx.Done():
-	case listenErr = <-errc: // a dead listener must not leave us running and reporting ready
+	case serveErr = <-errc: // a dead listener must not leave us running and reporting ready
 	}
 	r.shuttingDown.Store(true)
 	logger.Info("shutting down")
@@ -90,5 +96,5 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Drain public first so /readyz reports 503 to probes for the whole drain window.
-	return errors.Join(listenErr, public.Shutdown(shutdownCtx), admin.Shutdown(shutdownCtx))
+	return errors.Join(serveErr, public.Shutdown(shutdownCtx), admin.Shutdown(shutdownCtx))
 }
