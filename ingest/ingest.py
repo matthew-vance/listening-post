@@ -99,7 +99,7 @@ def main() -> None:
     port = int(os.environ.get("DUMP1090_PORT", "30003"))
     batch_size = int(os.environ.get("BATCH_SIZE", "100"))
     flush_after = timedelta(seconds=float(os.environ.get("FLUSH_SECONDS", "5")))
-    db = open_db(os.environ.get("DB_PATH", "events.db"))
+    db = open_db(os.environ.get("DB_PATH", "../events.db"))
 
     try:
         while True:
