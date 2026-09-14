@@ -8,7 +8,7 @@ An ADS-B flight tracking pipeline. [dump1090](https://github.com/flightaware/dum
 Raspberry Pi                                        Server
 ┌──────────┐   :30003   ┌────────┐   events.db   ┌─────────┐   POST /v1/events   ┌─────────┐   ┌─────────┐
 │ dump1090 │ ─────────▶ │ ingest │ ────────────▶ │ publish │ ──────────────────▶ │ traefik │ ─▶│ gateway │
-└──────────┘   SBS-1    └────────┘    SQLite     └─────────┘    bearer token      └─────────┘   └─────────┘
+└──────────┘   SBS-1    └────────┘    SQLite     └─────────┘    bearer token     └─────────┘   └─────────┘
 ```
 
 Three processes run on the Pi:
@@ -37,35 +37,35 @@ Add `"<station name>": "<hash>"` to `stations.json` and restart the gateway. Put
 
 ## Gateway
 
-| Variable     | Default | Purpose                                   |
-|--------------|---------|-------------------------------------------|
-| `PORT`       | `8080`  | Public API (`/v1/*`)                      |
-| `ADMIN_PORT` | `9091`  | Internal `/healthz` and `/readyz` probes  |
-| `STATIONS_FILE` | `stations.json` | Station name → token hash registry |
+| Variable        | Default         | Purpose                                  |
+|-----------------|-----------------|------------------------------------------|
+| `PORT`          | `8080`          | Public API (`/v1/*`)                     |
+| `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
+| `STATIONS_FILE` | `stations.json` | Station name → token hash registry       |
 
 ## Ingest
 
-| Variable        | Default     | Purpose                                              |
-|-----------------|-------------|------------------------------------------------------|
-| `DUMP1090_HOST` | `localhost` | dump1090 host                                        |
-| `DUMP1090_PORT` | `30003`     | dump1090 SBS-1 BaseStation port                      |
-| `DB_PATH`       | `../events.db` | SQLite buffer file (repo root when run via `just`) |
-| `LOG_LEVEL`     | `INFO`      | `DEBUG` logs every raw line; `INFO` logs each commit |
-| `BATCH_SIZE`    | `100`       | Commit after this many lines                         |
-| `FLUSH_SECONDS` | `5`         | Commit after this long since the last commit         |
+| Variable        | Default        | Purpose                                              |
+|-----------------|----------------|------------------------------------------------------|
+| `DUMP1090_HOST` | `localhost`    | dump1090 host                                        |
+| `DUMP1090_PORT` | `30003`        | dump1090 SBS-1 BaseStation port                      |
+| `DB_PATH`       | `../events.db` | SQLite buffer file (repo root when run via `just`)   |
+| `LOG_LEVEL`     | `INFO`         | `DEBUG` logs every raw line; `INFO` logs each commit |
+| `BATCH_SIZE`    | `100`          | Commit after this many lines                         |
+| `FLUSH_SECONDS` | `5`            | Commit after this long since the last commit         |
 
 Batching keeps SD card writes down; on power loss at most one batch is lost. A normal stop (SIGINT/SIGTERM) flushes everything.
 
 ## Publish
 
-| Variable        | Default                 | Purpose                                              |
-|-----------------|-------------------------|------------------------------------------------------|
-| `DB_PATH`       | `../events.db`          | SQLite buffer file (same file ingest writes)         |
-| `GATEWAY_URL`   | `http://localhost`      | Gateway base URL (Traefik entrypoint)                |
-| `STATION_TOKEN` | *(required)*            | Bearer token minted with `just token`                |
-| `BATCH_SIZE`    | `500`                   | Events per POST                                      |
-| `POLL_SECONDS`  | `2`                     | Sleep when the buffer is empty                       |
-| `RETRY_SECONDS` | `5`                     | Sleep after a failed POST                            |
-| `LOG_LEVEL`     | `INFO`                  | Logs each published batch                            |
+| Variable        | Default            | Purpose                                      |
+|-----------------|--------------------|----------------------------------------------|
+| `DB_PATH`       | `../events.db`     | SQLite buffer file (same file ingest writes) |
+| `GATEWAY_URL`   | `http://localhost` | Gateway base URL (Traefik entrypoint)        |
+| `STATION_TOKEN` | *(required)*       | Bearer token minted with `just token`        |
+| `BATCH_SIZE`    | `500`              | Events per POST                              |
+| `POLL_SECONDS`  | `2`                | Sleep when the buffer is empty               |
+| `RETRY_SECONDS` | `5`                | Sleep after a failed POST                    |
+| `LOG_LEVEL`     | `INFO`             | Logs each published batch                    |
 
 Rows are deleted from the buffer only after the gateway returns 2xx, so delivery is at-least-once: a crash between the response and the delete re-sends that batch. The station (resolved from the token) plus `id` identifies an event uniquely across re-sends.
