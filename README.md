@@ -13,6 +13,7 @@ flowchart LR
     end
     subgraph server [Server]
         traefik --> gateway
+        gateway --> postgres[(postgres)]
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -55,6 +56,29 @@ Public routes (both require `Authorization: Bearer <token>`):
 | `PORT`          | `8080`          | Public API (`/v1/*`)                     |
 | `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
 | `STATIONS_FILE` | `stations.json` | Station name → token hash registry       |
+
+### Database
+
+Postgres runs as a compose service and is shared by every server-side service, so the schema is owned by the repo, not by any one service: migrations live in `db/migrations/` in [goose](https://github.com/pressly/goose) SQL format, in a single sequence, and are applied out-of-band — never by a service at startup:
+
+```sh
+just migrate          # apply pending (just up runs this for you, after postgres is healthy)
+just migrate-status
+just migrate-down     # roll back one
+```
+
+The goose CLI is pinned in `db/go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-gateway` needs Docker: the tests start a throwaway Postgres with testcontainers; `go test -short` skips those.
+
+#### Zero-downtime migrations
+
+Deploys are two steps in this order: **1. `just migrate`, 2. deploy the new gateway.** Between those steps the *old* gateway runs against the *new* schema, so every migration must be backward compatible with the version currently deployed. In practice (expand/contract):
+
+- Adding is safe in one release: new tables, new nullable columns (or columns with a default), new indexes.
+- Removing or tightening needs two releases: first ship code that no longer depends on the column/table/constraint, then a later migration drops it. Renames are a drop and an add.
+- `down` migrations exist for local development. Rolling back in production means deploying the previous gateway, which the additive schema still supports.
+- Indexes on large tables: `CREATE INDEX CONCURRENTLY` in a `-- +goose NO TRANSACTION` migration, so the live gateway isn't blocked.
+
+Gateway code keeps this workable by always naming columns — explicit lists in `INSERT`, no `SELECT *` — so a column the running version doesn't know about is simply ignored.
 
 ## Ingest
 

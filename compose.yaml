@@ -22,13 +22,33 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # - ./letsencrypt:/letsencrypt
 
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: listening_post
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    volumes:
+      - postgres:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432" # host-side only: just migrate, go run, psql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d listening_post"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   gateway:
     build: ./gateway
     restart: unless-stopped
     environment:
       STATIONS_FILE: /stations.json
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/listening_post
     volumes:
       - ./stations.json:/stations.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     labels:
       traefik.enable: "true"
       traefik.http.routers.gateway.rule: PathPrefix(`/v1`)
@@ -38,3 +58,6 @@ services:
       traefik.http.services.gateway.loadbalancer.healthcheck.path: /readyz
       traefik.http.services.gateway.loadbalancer.healthcheck.port: "9091"
       traefik.http.services.gateway.loadbalancer.healthcheck.interval: 10s
+
+volumes:
+  postgres:

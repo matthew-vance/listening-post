@@ -1,8 +1,24 @@
 set dotenv-load
 
-# Bring up the stack
+# Bring up the stack: postgres first, migrate, then everything else
 up:
+    docker compose up -d --wait postgres
+    just migrate
     docker compose up -d --build
+
+# Apply pending migrations (DATABASE_URL from .env)
+[working-directory: 'db']
+migrate:
+    go tool goose -dir migrations postgres "$DATABASE_URL" up
+
+[working-directory: 'db']
+migrate-status:
+    go tool goose -dir migrations postgres "$DATABASE_URL" status
+
+# Roll back the most recent migration
+[working-directory: 'db']
+migrate-down:
+    go tool goose -dir migrations postgres "$DATABASE_URL" down
 
 # Tear down the stack
 down:
