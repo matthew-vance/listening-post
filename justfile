@@ -11,6 +11,11 @@ up:
 archive-ls:
     find archive -name '*.parquet' | sort | tail -n 20
 
+# Serve a live map of aircraft.state on localhost:8082 (dev only; reads Kafka through the compose container)
+[working-directory: 'map']
+map:
+    python3 map.py
+
 # List Kafka topics
 kafka-topics:
     docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
@@ -75,7 +80,7 @@ station-list:
     scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
-test: test-gateway test-archiver test-processor test-ingest test-publish test-heartbeat
+test: test-gateway test-archiver test-processor test-ingest test-publish test-heartbeat test-map
 
 [working-directory: 'gateway']
 test-gateway:
@@ -99,4 +104,8 @@ test-publish:
 
 [working-directory: 'heartbeat']
 test-heartbeat:
+    python3 -m unittest
+
+[working-directory: 'map']
+test-map:
     python3 -m unittest

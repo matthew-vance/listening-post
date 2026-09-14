@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>listening post</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body, #map { height: 100%; margin: 0; }
+  #count { position: absolute; top: 10px; right: 10px; z-index: 1000; background: #fff; padding: 4px 8px; font: 14px system-ui; }
+  .plane { font-size: 32px; line-height: 1; color: #fff; }
+  .stale { opacity: 0.35; }
+</style>
+<div id="map"></div>
+<div id="count"></div>
+<script>
+  const map = L.map("map").setView([40.0, -83.0], 8);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "Tiles &copy; Esri", maxZoom: 16,
+  }).addTo(map);
+  const markers = new Map();
+  let centered = false;
+
+  async function refresh() {
+    const aircraft = await (await fetch("/state.json")).json();
+    const now = Date.now(), seen = new Set();
+    let positioned = 0;
+    for (const a of aircraft) {
+      if (a.lat == null || a.lon == null) continue;
+      positioned++;
+      seen.add(a.icao);
+      const stale = now - Date.parse(a.position_ts) > 60_000;
+      const icon = L.divIcon({
+        className: "plane" + (stale ? " stale" : ""),
+        html: `<div style="transform: rotate(${(a.track ?? 0) - 45}deg)">✈</div>`,
+        iconSize: [32, 32],
+      });
+      const popup = `<b>${a.callsign || a.icao}</b><br>${a.icao}<br>alt ${a.altitude ?? "?"} ft<br>gs ${a.ground_speed ?? "?"} kt<br>trk ${a.track ?? "?"}°<br>seen by ${a.stations.length} station(s)`;
+      let m = markers.get(a.icao);
+      if (!m) {
+        m = L.marker([a.lat, a.lon], { icon }).bindPopup(popup).addTo(map);
+        markers.set(a.icao, m);
+      } else {
+        m.setLatLng([a.lat, a.lon]).setIcon(icon).setPopupContent(popup);
+      }
+    }
+    for (const [icao, m] of markers) if (!seen.has(icao)) { m.remove(); markers.delete(icao); }
+    if (!centered && positioned > 0) { map.fitBounds([...markers.values()].map(m => m.getLatLng()), { maxZoom: 9 }); centered = true; }
+    document.getElementById("count").textContent = `${positioned} on map · ${aircraft.length} tracked`;
+  }
+  refresh();
+  setInterval(refresh, 2000);
+</script>

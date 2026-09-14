@@ -162,6 +162,10 @@ It consumes `events.decoded` rather than deriving state inside the decode loop b
 | `KAFKA_STATE_GROUP` | `processor-state` | State loop consumer group                 |
 | `EXPIRE_SECONDS`    | `300`             | Tombstone an aircraft silent this long    |
 
+#### Map
+
+`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` inside the compose container, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old.
+
 ### Kafka
 
 A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created: `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
