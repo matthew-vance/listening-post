@@ -1,6 +1,6 @@
 -- +goose Up
 CREATE TABLE heartbeats (
-    station_id          text             NOT NULL,
+    station_id          uuid             NOT NULL REFERENCES stations,
     reported_at         timestamptz      NOT NULL,  -- client clock
     received_at         timestamptz      NOT NULL,  -- server clock; skew = received - reported
     uptime_seconds      bigint           NOT NULL,

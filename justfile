@@ -40,23 +40,23 @@ heartbeat:
     python3 heartbeat.py
 
 # Register a station and mint its first token (see scripts/stations.sh)
-station-add name:
-    scripts/stations.sh add {{quote(name)}}
+station-add:
+    scripts/stations.sh add
 
-# Mint an additional token for rotation
-station-token-add name:
-    scripts/stations.sh token-add {{quote(name)}}
+# Mint an additional token for rotation; <station> is a UUID or unambiguous prefix
+station-token-add station:
+    scripts/stations.sh token-add {{quote(station)}}
 
 # Revoke one token by hash prefix (see station-tokens)
-station-token-revoke name prefix:
-    scripts/stations.sh token-revoke {{quote(name)}} {{quote(prefix)}}
+station-token-revoke station prefix:
+    scripts/stations.sh token-revoke {{quote(station)}} {{quote(prefix)}}
 
-station-tokens name:
-    scripts/stations.sh tokens {{quote(name)}}
+station-tokens station:
+    scripts/stations.sh tokens {{quote(station)}}
 
 # Revoke a station and every token (soft: rows and heartbeats remain)
-station-revoke name:
-    scripts/stations.sh revoke {{quote(name)}}
+station-revoke station:
+    scripts/stations.sh revoke {{quote(station)}}
 
 station-list:
     scripts/stations.sh list

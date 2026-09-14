@@ -36,13 +36,15 @@ Traefik is there to terminate TLS. The Let's Encrypt configuration is present in
 
 ### Registering a station
 
-Each publisher authenticates with a bearer token. A station can have several tokens at once; the gateway stores only their SHA-256 hashes (`stations`, `station_tokens`).
+Each publisher authenticates with a bearer token. Stations are identified by a generated UUID — there is no name, so a device can be registered before anyone decides what to call it. A station can have several tokens at once; the gateway stores only their SHA-256 hashes (`stations`, `station_tokens`).
 
 ```sh
-just station-add pi-shed      # registers the station, prints STATION_TOKEN=...
+just station-add              # prints STATION_ID=<uuid> and STATION_TOKEN=...
 just station-list
-just station-revoke pi-shed   # kills every token; soft: rows and heartbeats remain
+just station-revoke 3f2a      # kills every token; soft: rows and heartbeats remain
 ```
+
+Anywhere a recipe takes a station, a UUID or an unambiguous prefix works (as with git commits).
 
 Put `STATION_TOKEN=<token>` in the Pi's `.env` (see `.env.example`; gitignored) — `just` loads it automatically, so `just publish` and `just heartbeat` pick it up. None of this needs a gateway restart.
 
@@ -51,10 +53,10 @@ Put `STATION_TOKEN=<token>` in the Pi's `.env` (see `.env.example`; gitignored) 
 Rotation is add → switch → revoke, so the station never sees a 401:
 
 ```sh
-just station-token-add pi-shed                 # prints a new STATION_TOKEN; the old one still works
-# update the Pi's .env, restart publish and heartbeat, confirm station=pi-shed still appears in the gateway log
-just station-tokens pi-shed                    # hash prefixes with created/revoked times
-just station-token-revoke pi-shed <old prefix>
+just station-token-add 3f2a                    # prints a new STATION_TOKEN; the old one still works
+# update the Pi's .env, restart publish and heartbeat, confirm station=<uuid> still appears in the gateway log
+just station-tokens 3f2a                       # hash prefixes with created/revoked times
+just station-token-revoke 3f2a <old prefix>
 ```
 
 ## Gateway

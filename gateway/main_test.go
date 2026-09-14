@@ -23,8 +23,9 @@ const (
 	testToken   = "test-token"
 )
 
-// testStations returns a station store on a fresh DB with "dev" registered under testToken, plus the DB URL.
-func testStations(t *testing.T) (*stationStore, string) {
+// testStations returns a station store on a fresh DB with one station registered under testToken,
+// plus that station's id and the DB URL.
+func testStations(t *testing.T) (*stationStore, string, string) {
 	t.Helper()
 	url := testDB(t)
 	pool, err := pgxpool.New(t.Context(), url)
@@ -32,16 +33,19 @@ func testStations(t *testing.T) (*stationStore, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	insertStation(t, pool, "dev", testToken)
-	return &stationStore{pool: pool}, url
+	id := insertStation(t, pool, testToken)
+	return &stationStore{pool: pool}, id, url
 }
 
-func insertStation(t *testing.T, pool *pgxpool.Pool, id, token string) {
+// insertStation registers a station with one token and returns its generated id.
+func insertStation(t *testing.T, pool *pgxpool.Pool, token string) string {
 	t.Helper()
-	if _, err := pool.Exec(t.Context(), "INSERT INTO stations (id) VALUES ($1)", id); err != nil {
+	var id string
+	if err := pool.QueryRow(t.Context(), "INSERT INTO stations DEFAULT VALUES RETURNING id").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	insertToken(t, pool, id, token)
+	return id
 }
 
 func insertToken(t *testing.T, pool *pgxpool.Pool, id, token string) {
@@ -71,7 +75,7 @@ var (
 )
 
 func TestStationStoreLookup(t *testing.T) {
-	stations, _ := testStations(t)
+	stations, id, _ := testStations(t)
 	ctx := t.Context()
 	resolves := func(token string) bool {
 		t.Helper()
@@ -79,8 +83,8 @@ func TestStationStoreLookup(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if ok && station != "dev" {
-			t.Fatalf("token resolved to %q, want dev", station)
+		if ok && station != id {
+			t.Fatalf("token resolved to %q, want %q", station, id)
 		}
 		return ok
 	}
@@ -90,7 +94,7 @@ func TestStationStoreLookup(t *testing.T) {
 	}
 
 	// rotation: add a second token, both work; revoke the first, only the second works
-	insertToken(t, stations.pool, "dev", "second-token")
+	insertToken(t, stations.pool, id, "second-token")
 	if !resolves(testToken) || !resolves("second-token") {
 		t.Fatal("after adding a token: want both valid")
 	}
@@ -102,7 +106,7 @@ func TestStationStoreLookup(t *testing.T) {
 	}
 
 	// station kill switch
-	if _, err := stations.pool.Exec(ctx, "UPDATE stations SET revoked_at = now() WHERE id = 'dev'"); err != nil {
+	if _, err := stations.pool.Exec(ctx, "UPDATE stations SET revoked_at = now() WHERE id = $1", id); err != nil {
 		t.Fatal(err)
 	}
 	if resolves("second-token") {
@@ -114,7 +118,7 @@ func TestBearerAuth(t *testing.T) {
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(stationFrom(r.Context())))
 	})
-	stations, _ := testStations(t)
+	stations, id, _ := testStations(t)
 	failing := lookupFunc(func(context.Context, string) (string, bool, error) { return "", false, errors.New("boom") })
 
 	tests := []struct {
@@ -126,7 +130,7 @@ func TestBearerAuth(t *testing.T) {
 		{"no header", "", stations, http.StatusUnauthorized, ""},
 		{"wrong scheme", "Basic dGVzdA==", stations, http.StatusUnauthorized, ""},
 		{"unknown token", "Bearer nope", stations, http.StatusUnauthorized, ""},
-		{"valid", "Bearer " + testToken, stations, http.StatusOK, "dev"},
+		{"valid", "Bearer " + testToken, stations, http.StatusOK, id},
 		{"store error", "Bearer " + testToken, failing, http.StatusInternalServerError, ""},
 	}
 	for _, tt := range tests {
@@ -200,7 +204,7 @@ func TestReadyz(t *testing.T) {
 }
 
 func TestEventsPost(t *testing.T) {
-	stations, _ := testStations(t)
+	stations, _, _ := testStations(t)
 	tests := []struct {
 		name        string
 		token       string
@@ -263,7 +267,7 @@ func TestHeartbeatPost(t *testing.T) {
 		{"negative buffer_depth", testToken, `{"reported_at":"2026-09-14T14:00:00Z","uptime_seconds":1,"disk_free_bytes":1,"buffer_depth":-1}`, http.StatusUnprocessableEntity, "buffer_depth"},
 		{"negative event_rate", testToken, `{` + required + `,"event_rate":-1}`, http.StatusUnprocessableEntity, "event_rate"},
 	}
-	stations, _ := testStations(t)
+	stations, id, _ := testStations(t)
 	pool := stations.pool
 	store := &heartbeatStore{pool: pool}
 	for _, tt := range tests {
@@ -294,7 +298,7 @@ func TestHeartbeatPost(t *testing.T) {
 	}
 
 	var stored int
-	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM heartbeats WHERE station_id = 'dev'").Scan(&stored); err != nil {
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM heartbeats WHERE station_id = $1", id).Scan(&stored); err != nil {
 		t.Fatal(err)
 	}
 	if stored != 1 { // three 200s share one reported_at, so one row
@@ -316,7 +320,7 @@ func TestHeartbeatPost(t *testing.T) {
 
 func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
-	_, dbURL := testStations(t)
+	_, _, dbURL := testStations(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":
@@ -366,7 +370,7 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	_, dbURL := testStations(t)
+	_, _, dbURL := testStations(t)
 	getenv := func(key string) string {
 		switch key {
 		case "PORT":

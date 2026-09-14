@@ -127,7 +127,7 @@ func TestMigrationsAreIdempotentAndReversible(t *testing.T) {
 }
 
 func TestHeartbeatStoreSave(t *testing.T) {
-	stations, _ := testStations(t)
+	stations, id, _ := testStations(t)
 	pool := stations.pool
 	store := &heartbeatStore{pool: pool}
 	ctx := t.Context()
@@ -144,10 +144,10 @@ func TestHeartbeatStoreSave(t *testing.T) {
 		EventRate:     &rate,
 	}
 
-	if err := store.Save(ctx, "dev", received, hb); err != nil {
+	if err := store.Save(ctx, id, received, hb); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(ctx, "dev", received.Add(time.Second), hb); err != nil { // re-send: same (station, reported_at)
+	if err := store.Save(ctx, id, received.Add(time.Second), hb); err != nil { // re-send: same (station, reported_at)
 		t.Fatal(err)
 	}
 
@@ -159,7 +159,7 @@ func TestHeartbeatStoreSave(t *testing.T) {
 		gotDepth                int64
 	)
 	row := pool.QueryRow(ctx, `SELECT count(*) OVER (), received_at, last_event_ts, oldest_buffered_ts, event_rate, buffer_depth
-		FROM heartbeats WHERE station_id = 'dev'`)
+		FROM heartbeats WHERE station_id = $1`, id)
 	if err := row.Scan(&count, &gotReceived, &gotLastEvt, &gotOldest, &gotRate, &gotDepth); err != nil {
 		t.Fatal(err)
 	}
@@ -167,21 +167,8 @@ func TestHeartbeatStoreSave(t *testing.T) {
 		t.Fatalf("rows = %d, want 1 (re-send must be ignored)", count)
 	}
 
-	if err := store.Save(ctx, "ghost", received, hb); err == nil {
+	if err := store.Save(ctx, "00000000-0000-0000-0000-000000000000", received, hb); err == nil {
 		t.Fatal("save for unregistered station: want FK error")
-	}
-
-	// renaming a station carries its tokens and heartbeats with it
-	if _, err := pool.Exec(ctx, "UPDATE stations SET id = 'renamed' WHERE id = 'dev'"); err != nil {
-		t.Fatal(err)
-	}
-	var moved int
-	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM heartbeats WHERE station_id = 'renamed')
-		+ (SELECT count(*) FROM station_tokens WHERE station_id = 'renamed')`).Scan(&moved); err != nil {
-		t.Fatal(err)
-	}
-	if moved != 2 {
-		t.Fatalf("rows following the rename = %d, want 2 (1 heartbeat + 1 token)", moved)
 	}
 	if !gotReceived.Equal(received) || !gotLastEvt.Equal(reported) || gotOldest != nil || gotRate == nil || *gotRate != rate || gotDepth != 7 {
 		t.Fatalf("row = received %v lastEvt %v oldest %v rate %v depth %d", gotReceived, gotLastEvt, gotOldest, gotRate, gotDepth)
