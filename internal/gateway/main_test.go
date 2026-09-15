@@ -308,20 +308,19 @@ func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
 	_, _, dbURL := testStations(t)
 	topic := kafkatest.Topic(t)
-	env := map[string]string{
-		"PORT":          publicPort,
-		"ADMIN_PORT":    adminPort,
-		"DATABASE_URL":  dbURL,
-		"KAFKA_BROKERS": strings.Join(kafkatest.Brokers, ","),
-		"KAFKA_RAW":     topic,
+	cfg := Config{
+		Port:         publicPort,
+		AdminPort:    adminPort,
+		DatabaseURL:  dbURL,
+		KafkaBrokers: kafkatest.Brokers,
+		KafkaRaw:     topic,
 	}
-	getenv := func(key string) string { return env[key] }
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, getenv, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
 
 	if err := waitForReady(ctx, 2*time.Second, "http://localhost:"+adminPort+"/readyz"); err != nil {
 		t.Fatal(err)
@@ -354,16 +353,15 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	env := map[string]string{
-		"PORT":          taken,
-		"ADMIN_PORT":    freePort(t),
-		"DATABASE_URL":  testDB(t),
-		"KAFKA_BROKERS": strings.Join(kafkatest.Brokers, ","),
+	cfg := Config{
+		Port:         taken,
+		AdminPort:    freePort(t),
+		DatabaseURL:  testDB(t),
+		KafkaBrokers: kafkatest.Brokers,
 	}
-	getenv := func(key string) string { return env[key] }
 
 	done := make(chan error, 1)
-	go func() { done <- Run(t.Context(), getenv, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(t.Context(), cfg, slog.New(slog.DiscardHandler)) }()
 
 	select {
 	case err := <-done:

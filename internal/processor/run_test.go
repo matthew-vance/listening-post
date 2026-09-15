@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,20 +36,18 @@ func TestRunDecodesTopic(t *testing.T) {
 	}
 	producer.Close()
 
-	getenv := func(key string) string {
-		return map[string]string{
-			"KAFKA_BROKERS":         strings.Join(kafkatest.Brokers, ","),
-			"KAFKA_RAW":             in,
-			"KAFKA_DECODED":         out,
-			"PROCESSOR_GROUP":       "g_" + in,
-			"KAFKA_STATE":           stateTopic,
-			"PROCESSOR_STATE_GROUP": "gs_" + in,
-			"EXPIRE_SECONDS":        "1",
-		}[key]
+	cfg := Config{
+		KafkaBrokers:        kafkatest.Brokers,
+		KafkaRaw:            in,
+		KafkaDecoded:        out,
+		ProcessorGroup:      "g_" + in,
+		KafkaState:          stateTopic,
+		ProcessorStateGroup: "gs_" + in,
+		ExpireSeconds:       1,
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, getenv, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
 
 	got := kafkatest.Consume(t, out, 4) // the unparseable line is skipped
 
@@ -107,7 +104,7 @@ func TestRunDecodesTopic(t *testing.T) {
 	// offsets committed: a second run sees nothing new (nothing more lands on out within the window)
 	ctx2, cancel2 := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel2()
-	if err := Run(ctx2, getenv, slog.New(slog.DiscardHandler)); err != nil {
+	if err := Run(ctx2, cfg, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if extra := len(kafkatest.ConsumeUpTo(t, out, 5, 3*time.Second)); extra != 4 {
@@ -117,16 +114,14 @@ func TestRunDecodesTopic(t *testing.T) {
 
 func TestStateWarmsFromCompactedTopic(t *testing.T) {
 	in, out, stateTopic := kafkatest.Topic(t), kafkatest.Topic(t), kafkatest.Topic(t)
-	getenv := func(key string) string {
-		return map[string]string{
-			"KAFKA_BROKERS":         strings.Join(kafkatest.Brokers, ","),
-			"KAFKA_RAW":             in,
-			"KAFKA_DECODED":         out,
-			"PROCESSOR_GROUP":       "g_" + in,
-			"KAFKA_STATE":           stateTopic,
-			"PROCESSOR_STATE_GROUP": "gs_" + in,
-			"EXPIRE_SECONDS":        "3600",
-		}[key]
+	cfg := Config{
+		KafkaBrokers:        kafkatest.Brokers,
+		KafkaRaw:            in,
+		KafkaDecoded:        out,
+		ProcessorGroup:      "g_" + in,
+		KafkaState:          stateTopic,
+		ProcessorStateGroup: "gs_" + in,
+		ExpireSeconds:       3600,
 	}
 	produceRaw := func(raws ...string) {
 		t.Helper()
@@ -148,7 +143,7 @@ func TestStateWarmsFromCompactedTopic(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- Run(ctx, getenv, slog.New(slog.DiscardHandler)) }()
+		go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
 		recs := kafkatest.Consume(t, stateTopic, want)
 		cancel()
 		if err := <-done; err != nil {
@@ -177,16 +172,14 @@ func TestStateWarmsFromCompactedTopic(t *testing.T) {
 // and the first must forget those aircraft rather than expire them out from under the new owner.
 func TestStateSurvivesRebalance(t *testing.T) {
 	in, out, stateTopic := kafkatest.TopicN(t, 2), kafkatest.TopicN(t, 2), kafkatest.TopicN(t, 2)
-	getenv := func(key string) string {
-		return map[string]string{
-			"KAFKA_BROKERS":         strings.Join(kafkatest.Brokers, ","),
-			"KAFKA_RAW":             in,
-			"KAFKA_DECODED":         out,
-			"PROCESSOR_GROUP":       "g_" + in,
-			"KAFKA_STATE":           stateTopic,
-			"PROCESSOR_STATE_GROUP": "gs_" + in,
-			"EXPIRE_SECONDS":        "2",
-		}[key]
+	cfg := Config{
+		KafkaBrokers:        kafkatest.Brokers,
+		KafkaRaw:            in,
+		KafkaDecoded:        out,
+		ProcessorGroup:      "g_" + in,
+		KafkaState:          stateTopic,
+		ProcessorStateGroup: "gs_" + in,
+		ExpireSeconds:       2,
 	}
 	icaos := []string{"A00001", "A00002", "A00003", "A00004", "A00005", "A00006", "A00007", "A00008"}
 	producer, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
@@ -209,7 +202,7 @@ func TestStateSurvivesRebalance(t *testing.T) {
 	start := func() (context.CancelFunc, chan error) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- Run(ctx, getenv, slog.New(slog.DiscardHandler)) }()
+		go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
 		return cancel, done
 	}
 

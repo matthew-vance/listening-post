@@ -42,19 +42,18 @@ func TestRunArchivesTopic(t *testing.T) {
 
 	dir := t.TempDir()
 	group := "g_" + topic
-	env := map[string]string{
-		"KAFKA_BROKERS":  strings.Join(kafkatest.Brokers, ","),
-		"KAFKA_RAW":      topic,
-		"ARCHIVER_GROUP": group,
-		"ARCHIVE_DIR":    dir,
-		"FLUSH_RECORDS":  "10",
-		"FLUSH_SECONDS":  "1",
+	cfg := Config{
+		KafkaBrokers:  kafkatest.Brokers,
+		KafkaRaw:      topic,
+		ArchiverGroup: group,
+		ArchiveDir:    dir,
+		FlushRecords:  10,
+		FlushSeconds:  1,
 	}
-	getenv := func(key string) string { return env[key] }
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, getenv, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
 	var rows []row
 	for deadline := time.Now().Add(20 * time.Second); len(rows) < 25 && time.Now().Before(deadline); {
 		time.Sleep(200 * time.Millisecond)
@@ -82,10 +81,10 @@ func TestRunArchivesTopic(t *testing.T) {
 
 	// offsets were committed: a second run into a fresh dir archives nothing
 	fresh := t.TempDir()
-	env["ARCHIVE_DIR"] = fresh
+	cfg.ArchiveDir = fresh
 	ctx, cancel = context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := Run(ctx, getenv, slog.New(slog.DiscardHandler)); err != nil {
+	if err := Run(ctx, cfg, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if n := countFiles(t, fresh); n != 0 {

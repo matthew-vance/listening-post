@@ -1,13 +1,10 @@
 package processor
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -17,38 +14,16 @@ import (
 // cancelled or SIGINT/SIGTERM. Two loops with their own consumer groups: decoded is keyed by ICAO, so
 // instances split aircraft (not stations) between them by partition. Each instance holds state only for the
 // decoded partitions it owns, warming it on assignment and dropping it on revoke.
-//
-// Environment:
-//
-//	KAFKA_BROKERS          comma-separated bootstrap brokers (required)
-//	KAFKA_RAW              raw topic to read (default events.raw)
-//	KAFKA_DECODED          decoded topic to write (default events.decoded)
-//	PROCESSOR_GROUP        decode loop consumer group (default processor)
-//	KAFKA_STATE            state topic to write (default aircraft.state)
-//	PROCESSOR_STATE_GROUP  state loop consumer group (default processor-state)
-//	EXPIRE_SECONDS         tombstone an aircraft silent this long (default 300)
-func Run(ctx context.Context, getenv func(string) string, logger *slog.Logger) error {
-	brokers := getenv("KAFKA_BROKERS")
-	if brokers == "" {
-		return errors.New("KAFKA_BROKERS is not set")
-	}
-	seeds := strings.Split(brokers, ",")
-	in, out, group := cmp.Or(getenv("KAFKA_RAW"), "events.raw"), cmp.Or(getenv("KAFKA_DECODED"), "events.decoded"), cmp.Or(getenv("PROCESSOR_GROUP"), "processor")
-	stateTopic, stateGroup := cmp.Or(getenv("KAFKA_STATE"), "aircraft.state"), cmp.Or(getenv("PROCESSOR_STATE_GROUP"), "processor-state")
-	expireSeconds, err := strconv.Atoi(cmp.Or(getenv("EXPIRE_SECONDS"), "300"))
-	if err != nil {
-		return fmt.Errorf("EXPIRE_SECONDS: %w", err)
-	}
-
-	decodeClient, err := consumerClient(ctx, seeds, group, in)
+func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
+	decodeClient, err := consumerClient(ctx, cfg.KafkaBrokers, cfg.ProcessorGroup, cfg.KafkaRaw)
 	if err != nil {
 		return err
 	}
 	defer decodeClient.CloseAllowingRebalance()
 	// Snapshots go to the same partition number their decoded messages came from, so the state topic needs at
 	// least as many partitions as the decoded one.
-	sl := &stateLoop{seeds: seeds, in: out, topic: stateTopic, state: newState(time.Duration(expireSeconds) * time.Second), logger: logger, now: time.Now}
-	stateClient, err := consumerClient(ctx, seeds, stateGroup, out,
+	sl := &stateLoop{seeds: cfg.KafkaBrokers, in: cfg.KafkaDecoded, topic: cfg.KafkaState, state: newState(time.Duration(cfg.ExpireSeconds) * time.Second), logger: logger, now: time.Now}
+	stateClient, err := consumerClient(ctx, cfg.KafkaBrokers, cfg.ProcessorStateGroup, cfg.KafkaDecoded,
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),
 		kgo.OnPartitionsAssigned(sl.onAssigned),
 		kgo.OnPartitionsRevoked(sl.onRevoked),
@@ -59,13 +34,13 @@ func Run(ctx context.Context, getenv func(string) string, logger *slog.Logger) e
 	}
 	defer stateClient.CloseAllowingRebalance()
 	sl.client = stateClient
-	logger.Info("processing", "in", in, "out", out, "state", stateTopic)
+	logger.Info("processing", "in", cfg.KafkaRaw, "out", cfg.KafkaDecoded, "state", cfg.KafkaState)
 
 	// Either loop failing stops both; ctx cancellation stops both cleanly.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errc := make(chan error, 2)
-	go func() { errc <- decodeLoop(ctx, decodeClient, out, logger) }()
+	go func() { errc <- decodeLoop(ctx, decodeClient, cfg.KafkaDecoded, logger) }()
 	go func() { errc <- sl.run(ctx) }()
 	first := <-errc
 	cancel()

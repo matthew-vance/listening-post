@@ -50,6 +50,8 @@ ExecStart=/usr/bin/python3 -m station
 Restart=always
 ```
 
+Resilience is three layers, each for a distinct failure mode: the loops retry *inside* (ingest reconnects, publish re-sends after a failed POST), so transient network and SQLite errors never exit them; the supervisor restarts a loop that exits anyway (an uncaught exception); and systemd restarts the supervisor itself if that dies. The supervisor's restart is therefore a rare safety net, not the primary retry path.
+
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `INGEST_BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `PUBLISH_BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
 The server side is one Go binary (`main.go`, `internal/`) running the gateway, processor, and archiver as goroutines in one container via `docker compose` (`just up`) behind Traefik. They talk through Kafka, not each other, so any one can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The three share one environment, so their variable names are disjoint.

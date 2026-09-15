@@ -28,11 +28,16 @@ def setup_logging() -> None:
     )
 
 
+def install_graceful_exit() -> None:
+    # SIGTERM -> SystemExit unwinds through a loop's finally, which is what flushes ingest's pending batch.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
+
 def child(target: Callable[[], None]) -> None:
     # Runs in the child. Under spawn/forkserver (macOS, Python 3.14+ Linux) it inherits neither the parent's
     # logging config nor its signal handlers, so both are set here.
     setup_logging()
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # SystemExit unwinds through the loop's finally
+    install_graceful_exit()
     try:
         target()
     except KeyboardInterrupt:  # Ctrl-C reaches the whole process group
@@ -49,7 +54,7 @@ def start(name: str, target: Callable[[], None]) -> multiprocessing.Process:
 def supervise(targets: dict[str, Callable[[], None]], restart_after: float) -> None:
     """Run every target until SIGINT/SIGTERM, restarting any that exits. Never returns on its own."""
     procs = {name: start(name, target) for name, target in targets.items()}
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    install_graceful_exit()
     try:
         while True:
             wait([p.sentinel for p in procs.values()])  # blocks until at least one child exits
@@ -64,6 +69,10 @@ def supervise(targets: dict[str, Callable[[], None]], restart_after: float) -> N
             p.terminate()  # SIGTERM -> child's sys.exit -> its finally runs
         for p in procs.values():
             p.join(10)
+            if p.is_alive():  # a child stuck in a flush ignores SIGTERM; don't orphan it
+                log.error("%s still alive after SIGTERM; killing", p.name)
+                p.kill()
+                p.join()
         log.info("shut down")
 
 
