@@ -12,6 +12,11 @@ flowchart LR
         ingest -. "events.db (read-only)" .-> heartbeat
     end
     subgraph server [Server]
+        subgraph binary [listening-post]
+            gateway
+            processor
+            archiver
+        end
         traefik --> gateway
         gateway --> postgres[(postgres)]
         gateway -- "events.raw" --> kafka[(kafka)]
@@ -33,7 +38,9 @@ The SQLite file is the buffer between the two: it survives Pi reboots and gatewa
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The gateway (`gateway/`, Go) runs on the server via `docker compose` (`just up`) behind Traefik. It authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
+The server side is one Go binary (`main.go`, `internal/`) running the gateway, processor, and archiver as goroutines in one container via `docker compose` (`just up`) behind Traefik. They talk through Kafka, not each other, so any one can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The three share one environment, so their variable names are disjoint.
+
+The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
 
 Traefik is there to terminate TLS. The Let's Encrypt configuration is present in `compose.yaml` but commented out until there is a real hostname. **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
 
@@ -67,7 +74,7 @@ just station-token-revoke 3f2a <old prefix>
 Public routes (both require `Authorization: Bearer <token>`):
 
 - `POST /v1/events` — a batch of raw SBS-1 lines from the station's buffer.
-- `POST /v1/stations/heartbeat` — periodic station status: uptime, free disk, buffer depth, and optional diagnostics (see `heartbeatRequest` in `gateway/handlers.go`).
+- `POST /v1/stations/heartbeat` — periodic station status: uptime, free disk, buffer depth, and optional diagnostics (see `heartbeatRequest` in `internal/gateway/handlers.go`).
 
 | Variable        | Default         | Purpose                                  |
 |-----------------|-----------------|------------------------------------------|
@@ -75,7 +82,7 @@ Public routes (both require `Authorization: Bearer <token>`):
 | `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
 | `DATABASE_URL`  | *(required)*    | Postgres connection URL                  |
 | `KAFKA_BROKERS` | *(required)*    | Comma-separated bootstrap brokers        |
-| `KAFKA_TOPIC`   | `events.raw`    | Topic events are published to            |
+| `KAFKA_RAW`     | `events.raw`    | Topic events are published to            |
 
 ### Database
 
@@ -87,11 +94,11 @@ just migrate-status
 just migrate-down     # roll back one
 ```
 
-The goose CLI is pinned in `db/go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-gateway` needs Docker: the tests start a throwaway Postgres with testcontainers; `go test -short` skips those.
+The goose CLI is pinned in `go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-server` needs Docker: the tests start throwaway Postgres and Kafka containers with testcontainers; `go test -short ./...` skips those.
 
 ### Archiver
 
-`archiver/` (Go) consumes `events.raw` and writes every record, untouched, to Hive-partitioned Parquet under `archive/` — the raw system of record everything downstream can be rebuilt from (the "sushi principle": store the raw fish).
+`internal/archiver/` consumes `events.raw` and writes every record, untouched, to Hive-partitioned Parquet under `archive/` — the raw system of record everything downstream can be rebuilt from (the "sushi principle": store the raw fish).
 
 ```
 archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
@@ -107,8 +114,8 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 | Variable        | Default      | Purpose                                            |
 |-----------------|--------------|----------------------------------------------------|
 | `KAFKA_BROKERS` | *(required)* | Comma-separated bootstrap brokers                  |
-| `KAFKA_TOPIC`   | `events.raw` | Topic to archive                                   |
-| `KAFKA_GROUP`   | `archiver`   | Consumer group                                     |
+| `KAFKA_RAW`     | `events.raw` | Topic to archive                                   |
+| `ARCHIVER_GROUP`| `archiver`   | Consumer group                                     |
 | `ARCHIVE_DIR`   | *(required)* | Root directory for Parquet files                   |
 | `FLUSH_RECORDS` | `10000`      | Write a batch after this many records              |
 | `FLUSH_SECONDS` | `300`        | …or after this long since the last write           |
@@ -117,7 +124,7 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 
 ### Processor
 
-`processor/` (Go) is the one place SBS-1 is parsed. It reads `events.raw` and writes one typed JSON record per line to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data.
+`internal/processor/` is the one place SBS-1 is parsed. It reads `events.raw` and writes one typed JSON record per line to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data.
 
 The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus the [SBS-1 fields](http://woodair.net/sbs/article/barebones42_socket_data.htm), present only when the line carried them:
 
@@ -152,15 +159,15 @@ Each field updates only from a message at least as new as the one that last set 
 
 It consumes `events.decoded` rather than deriving state inside the decode loop because decoded partitions are keyed by ICAO: multiple processor instances split *aircraft* between them, not stations. A snapshot is written to the same partition number of `aircraft.state` its messages arrived on, so `aircraft.state` needs at least as many partitions as `events.decoded`.
 
-| Variable            | Default           | Purpose                                   |
-|---------------------|-------------------|-------------------------------------------|
-| `KAFKA_BROKERS`     | *(required)*      | Comma-separated bootstrap brokers         |
-| `KAFKA_IN`          | `events.raw`      | Raw topic to read                         |
-| `KAFKA_OUT`         | `events.decoded`  | Decoded topic to write                    |
-| `KAFKA_GROUP`       | `processor`       | Decode loop consumer group                |
-| `KAFKA_STATE`       | `aircraft.state`  | State topic to write                      |
-| `KAFKA_STATE_GROUP` | `processor-state` | State loop consumer group                 |
-| `EXPIRE_SECONDS`    | `300`             | Tombstone an aircraft silent this long    |
+| Variable                | Default           | Purpose                                   |
+|-------------------------|-------------------|-------------------------------------------|
+| `KAFKA_BROKERS`         | *(required)*      | Comma-separated bootstrap brokers         |
+| `KAFKA_RAW`             | `events.raw`      | Raw topic to read                         |
+| `KAFKA_DECODED`         | `events.decoded`  | Decoded topic to write                    |
+| `PROCESSOR_GROUP`       | `processor`       | Decode loop consumer group                |
+| `KAFKA_STATE`           | `aircraft.state`  | State topic to write                      |
+| `PROCESSOR_STATE_GROUP` | `processor-state` | State loop consumer group                 |
+| `EXPIRE_SECONDS`        | `300`             | Tombstone an aircraft silent this long    |
 
 #### Map
 
@@ -170,7 +177,7 @@ It consumes `events.decoded` rather than deriving state inside the decode loop b
 
 A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created: `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
-The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}`. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
+The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`, the one definition every side uses). It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
 
 - `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
 - Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.
@@ -178,7 +185,7 @@ The gateway publishes one record per event to `events.raw`, keyed by station UUI
 
 #### Zero-downtime migrations
 
-Deploys are two steps in this order: **1. `just migrate`, 2. deploy the new gateway.** Between those steps the *old* gateway runs against the *new* schema, so every migration must be backward compatible with the version currently deployed. In practice (expand/contract):
+Deploys are two steps in this order: **1. `just migrate`, 2. deploy the new binary.** Between those steps the *old* gateway runs against the *new* schema, so every migration must be backward compatible with the version currently deployed. In practice (expand/contract):
 
 - Adding is safe in one release: new tables, new nullable columns (or columns with a default), new indexes.
 - Removing or tightening needs two releases: first ship code that no longer depends on the column/table/constraint, then a later migration drops it. Renames are a drop and an add.

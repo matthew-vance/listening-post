@@ -1,0 +1,6 @@
+.git
+archive
+*.db*
+__pycache__
+.idea
+*_test.go

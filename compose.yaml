@@ -38,16 +38,19 @@ services:
       timeout: 3s
       retries: 10
 
-  gateway:
-    build: ./gateway
+  server:
+    build: .
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/listening_post
       KAFKA_BROKERS: kafka:9092
+      ARCHIVE_DIR: /archive
+    volumes:
+      - ./archive:/archive # bind mount so DuckDB and notebooks read it from the host
     depends_on:
       postgres:
         condition: service_healthy
-      kafka-init: # the topic must exist before we produce: auto-create is off
+      kafka-init: # the topics must exist before we produce: auto-create is off
         condition: service_completed_successfully
     labels:
       traefik.enable: "true"
@@ -58,27 +61,6 @@ services:
       traefik.http.services.gateway.loadbalancer.healthcheck.path: /readyz
       traefik.http.services.gateway.loadbalancer.healthcheck.port: "9091"
       traefik.http.services.gateway.loadbalancer.healthcheck.interval: 10s
-
-  processor:
-    build: ./processor
-    restart: unless-stopped
-    environment:
-      KAFKA_BROKERS: kafka:9092
-    depends_on:
-      kafka-init:
-        condition: service_completed_successfully
-
-  archiver:
-    build: ./archiver
-    restart: unless-stopped
-    environment:
-      KAFKA_BROKERS: kafka:9092
-      ARCHIVE_DIR: /archive
-    volumes:
-      - ./archive:/archive # bind mount so DuckDB and notebooks read it from the host
-    depends_on:
-      kafka-init:
-        condition: service_completed_successfully
 
   kafka:
     image: apache/kafka:4.3.1

@@ -1,6 +1,4 @@
-/gateway/gateway
-/archiver/archiver
-/processor/processor
+/listening-post
 __pycache__/
 *.db
 *.db-wal

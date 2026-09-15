@@ -21,18 +21,15 @@ kafka-topics:
     docker compose exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
 
 # Apply pending migrations (DATABASE_URL from .env)
-[working-directory: 'db']
 migrate:
-    go tool goose -dir migrations postgres "$DATABASE_URL" up
+    go tool goose -dir db/migrations postgres "$DATABASE_URL" up
 
-[working-directory: 'db']
 migrate-status:
-    go tool goose -dir migrations postgres "$DATABASE_URL" status
+    go tool goose -dir db/migrations postgres "$DATABASE_URL" status
 
 # Roll back the most recent migration
-[working-directory: 'db']
 migrate-down:
-    go tool goose -dir migrations postgres "$DATABASE_URL" down
+    go tool goose -dir db/migrations postgres "$DATABASE_URL" down
 
 # Tear down the stack
 down:
@@ -80,18 +77,10 @@ station-list:
     scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
-test: test-gateway test-archiver test-processor test-ingest test-publish test-heartbeat test-map
+test: test-server test-ingest test-publish test-heartbeat test-map
 
-[working-directory: 'gateway']
-test-gateway:
-    go test ./...
-
-[working-directory: 'archiver']
-test-archiver:
-    go test ./...
-
-[working-directory: 'processor']
-test-processor:
+# Needs Docker: starts throwaway Postgres and Kafka containers. `go test -short ./...` skips those.
+test-server:
     go test ./...
 
 [working-directory: 'ingest']
