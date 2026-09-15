@@ -27,7 +27,7 @@ func bearerAuth(logger *slog.Logger, stations stationLookup) func(http.Handler) 
 			if err != nil {
 				// A DB blip must not read as "your token is bad" to the client.
 				logger.Error("lookup station", "err", err)
-				encode(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+				fail(w, http.StatusInternalServerError, "internal")
 				return
 			}
 			if !found {
@@ -41,7 +41,7 @@ func bearerAuth(logger *slog.Logger, stations stationLookup) func(http.Handler) 
 
 func unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
-	encode(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+	fail(w, http.StatusUnauthorized, "unauthorized")
 }
 
 func stationFrom(ctx context.Context) string {

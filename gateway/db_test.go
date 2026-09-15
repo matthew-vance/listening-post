@@ -3,14 +3,17 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/jackc/pgx/v5/stdlib"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -25,6 +28,26 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 	ctx := context.Background()
+	// The two containers are independent; starting them together saves the whole Postgres boot per run.
+	var pg, kafka testcontainers.Container
+	var pgErr, kafkaErr error
+	var wg sync.WaitGroup
+	wg.Go(func() { pg, pgErr = startPostgres(ctx) })
+	wg.Go(func() { kafka, kafkaErr = startKafka(ctx) })
+	wg.Wait()
+	if err := errors.Join(pgErr, kafkaErr); err != nil {
+		fmt.Fprintln(os.Stderr, "start containers:", err)
+		_ = testcontainers.TerminateContainer(pg)
+		_ = testcontainers.TerminateContainer(kafka)
+		os.Exit(1)
+	}
+	code := m.Run()
+	_ = testcontainers.TerminateContainer(kafka)
+	_ = testcontainers.TerminateContainer(pg)
+	os.Exit(code)
+}
+
+func startPostgres(ctx context.Context) (testcontainers.Container, error) {
 	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine",
 		tcpostgres.WithDatabase("postgres"),
 		tcpostgres.WithUsername("postgres"),
@@ -32,24 +55,10 @@ func TestMain(m *testing.M) {
 		tcpostgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "start postgres container:", err)
-		os.Exit(1)
+		return nil, err
 	}
 	adminURL, err = pg.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "connection string:", err)
-		os.Exit(1)
-	}
-	kafka, err := startKafka(ctx)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "start kafka container:", err)
-		_ = testcontainers.TerminateContainer(pg)
-		os.Exit(1)
-	}
-	code := m.Run()
-	_ = testcontainers.TerminateContainer(kafka)
-	_ = testcontainers.TerminateContainer(pg)
-	os.Exit(code)
+	return pg, err
 }
 
 // testDB creates a fresh, migrated database for one test and returns its URL.
@@ -69,21 +78,15 @@ func testDB(t *testing.T) string {
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatal(err)
 	}
-	url := fmt.Sprintf("postgres://postgres:test@%s/%s?sslmode=disable", hostPort(t, adminURL), name)
-	if _, err := migrator(t, url).Up(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return url
-}
-
-func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	pool, err := pgxpool.New(t.Context(), testDB(t))
+	u, err := url.Parse(adminURL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(pool.Close)
-	return pool
+	u.Path = "/" + name
+	if _, err := migrator(t, u.String()).Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return u.String()
 }
 
 func migrator(t *testing.T, url string) *goose.Provider {
@@ -99,18 +102,6 @@ func migrator(t *testing.T, url string) *goose.Provider {
 	}
 	return p
 }
-
-// hostPort extracts "host:port" from a postgres URL.
-func hostPort(t *testing.T, url string) string {
-	t.Helper()
-	cfg, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return fmt.Sprintf("%s:%d", cfg.ConnConfig.Host, cfg.ConnConfig.Port)
-}
-
-var _ = stdlib.GetDefaultDriver // registers the "pgx" database/sql driver
 
 func TestMigrationsAreIdempotentAndReversible(t *testing.T) {
 	url := testDB(t) // already at latest

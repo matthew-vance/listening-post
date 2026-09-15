@@ -8,7 +8,7 @@ import (
 )
 
 type readiness struct {
-	ready, shuttingDown atomic.Bool
+	ready atomic.Bool
 }
 
 func newServer(logger *slog.Logger, stations stationLookup, store heartbeatSaver, pub eventPublisher) http.Handler {

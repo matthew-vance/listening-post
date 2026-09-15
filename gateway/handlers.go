@@ -20,7 +20,7 @@ type eventsRequest struct {
 	Events []event `json:"events"`
 }
 
-func (r eventsRequest) Valid(_ context.Context) map[string]string {
+func (r eventsRequest) Valid() map[string]string {
 	problems := map[string]string{}
 	if len(r.Events) == 0 {
 		problems["events"] = "must not be empty"
@@ -41,8 +41,8 @@ type eventPublisher interface {
 func handleEventsPost(logger *slog.Logger, pub eventPublisher) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-		req, problems, err := decodeValid[eventsRequest](r)
-		if respondDecodeError(w, problems, err) {
+		req, ok := decodeValid[eventsRequest](w, r)
+		if !ok {
 			return
 		}
 		station := stationFrom(r.Context())
@@ -51,7 +51,7 @@ func handleEventsPost(logger *slog.Logger, pub eventPublisher) http.Handler {
 		defer cancel()
 		if err := pub.Publish(ctx, station, time.Now(), req.Events); err != nil {
 			logger.Error("publish events", "station", station, "count", len(req.Events), "err", err)
-			encode(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			fail(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		first, last := req.Events[0], req.Events[len(req.Events)-1]
@@ -72,19 +72,19 @@ type heartbeatRequest struct {
 	EventRate        *float64   `json:"event_rate"`
 }
 
-func (r heartbeatRequest) Valid(_ context.Context) map[string]string {
+func (r heartbeatRequest) Valid() map[string]string {
 	problems := map[string]string{}
 	if r.ReportedAt.IsZero() {
 		problems["reported_at"] = "must be set"
 	}
-	for name, v := range map[string]int64{
-		"uptime_seconds":  r.UptimeSeconds,
-		"disk_free_bytes": r.DiskFreeBytes,
-		"buffer_depth":    r.BufferDepth,
-	} {
-		if v < 0 {
-			problems[name] = "must not be negative"
-		}
+	if r.UptimeSeconds < 0 {
+		problems["uptime_seconds"] = "must not be negative"
+	}
+	if r.DiskFreeBytes < 0 {
+		problems["disk_free_bytes"] = "must not be negative"
+	}
+	if r.BufferDepth < 0 {
+		problems["buffer_depth"] = "must not be negative"
 	}
 	if r.EventRate != nil && *r.EventRate < 0 {
 		problems["event_rate"] = "must not be negative"
@@ -100,14 +100,14 @@ type heartbeatSaver interface {
 func handleHeartbeatPost(logger *slog.Logger, store heartbeatSaver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
-		req, problems, err := decodeValid[heartbeatRequest](r)
-		if respondDecodeError(w, problems, err) {
+		req, ok := decodeValid[heartbeatRequest](w, r)
+		if !ok {
 			return
 		}
 		station := stationFrom(r.Context())
 		if err := store.Save(r.Context(), station, time.Now(), req); err != nil {
 			logger.Error("save heartbeat", "station", station, "err", err)
-			encode(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			fail(w, http.StatusInternalServerError, "internal")
 			return
 		}
 		attrs := []any{
@@ -134,22 +134,6 @@ func handleHeartbeatPost(logger *slog.Logger, store heartbeatSaver) http.Handler
 	})
 }
 
-// respondDecodeError writes the response for a failed decodeValid and reports whether it did.
-func respondDecodeError(w http.ResponseWriter, problems map[string]string, err error) bool {
-	var tooBig *http.MaxBytesError
-	switch {
-	case len(problems) > 0:
-		encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
-	case errors.As(err, &tooBig):
-		encode(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "body too large"})
-	case err != nil:
-		encode(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
-	default:
-		return false
-	}
-	return true
-}
-
 func handleHealthz() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		encode(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -159,7 +143,7 @@ func handleHealthz() http.Handler {
 // handleReadyz reports ready only when every named dependency check passes; the first failure names the reason.
 func handleReadyz(r *readiness, checks map[string]func(context.Context) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if !r.ready.Load() || r.shuttingDown.Load() {
+		if !r.ready.Load() {
 			encode(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
 			return
 		}
@@ -177,18 +161,33 @@ func handleReadyz(r *readiness, checks map[string]func(context.Context) error) h
 
 // validator reports semantic problems with an already-decoded request, keyed by field.
 type validator interface {
-	Valid(ctx context.Context) (problems map[string]string)
+	Valid() (problems map[string]string)
 }
 
-func decodeValid[T validator](r *http.Request) (T, map[string]string, error) {
-	var v T
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
-		return v, nil, fmt.Errorf("decode json: %w", err)
+// decodeValid decodes and validates the body, writing the 400/413/422 itself; ok is false when it did.
+func decodeValid[T validator](w http.ResponseWriter, r *http.Request) (v T, ok bool) {
+	var tooBig *http.MaxBytesError
+	err := json.NewDecoder(r.Body).Decode(&v)
+	switch {
+	case errors.As(err, &tooBig):
+		fail(w, http.StatusRequestEntityTooLarge, "body too large")
+	case err != nil:
+		fail(w, http.StatusBadRequest, "invalid json")
+	default:
+		if problems := v.Valid(); len(problems) > 0 {
+			encode(w, http.StatusUnprocessableEntity, map[string]any{"problems": problems})
+			return v, false
+		}
+		return v, true
 	}
-	return v, v.Valid(r.Context()), nil
+	return v, false
 }
 
-func encode[T any](w http.ResponseWriter, status int, v T) {
+func fail(w http.ResponseWriter, status int, msg string) {
+	encode(w, status, map[string]string{"error": msg})
+}
+
+func encode(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v) // headers already sent; nothing useful to do with a write error

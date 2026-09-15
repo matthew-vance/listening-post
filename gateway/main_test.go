@@ -184,23 +184,21 @@ func TestReadyz(t *testing.T) {
 	dbDown := map[string]func(context.Context) error{"database": pingFail, "kafka": pingOK}
 	kafkaDown := map[string]func(context.Context) error{"database": pingOK, "kafka": pingFail}
 	tests := []struct {
-		name                string
-		ready, shuttingDown bool
-		checks              map[string]func(context.Context) error
-		wantCode            int
-		wantBody            string
+		name     string
+		ready    bool
+		checks   map[string]func(context.Context) error
+		wantCode int
+		wantBody string
 	}{
-		{"not ready", false, false, allOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
-		{"ready", true, false, allOK, http.StatusOK, "{\"status\":\"ok\"}\n"},
-		{"shutting down", true, true, allOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
-		{"database down", true, false, dbDown, http.StatusServiceUnavailable, "{\"reason\":\"database\",\"status\":\"unavailable\"}\n"},
-		{"kafka down", true, false, kafkaDown, http.StatusServiceUnavailable, "{\"reason\":\"kafka\",\"status\":\"unavailable\"}\n"},
+		{"not ready", false, allOK, http.StatusServiceUnavailable, "{\"status\":\"unavailable\"}\n"},
+		{"ready", true, allOK, http.StatusOK, "{\"status\":\"ok\"}\n"},
+		{"database down", true, dbDown, http.StatusServiceUnavailable, "{\"reason\":\"database\",\"status\":\"unavailable\"}\n"},
+		{"kafka down", true, kafkaDown, http.StatusServiceUnavailable, "{\"reason\":\"kafka\",\"status\":\"unavailable\"}\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &readiness{}
 			r.ready.Store(tt.ready)
-			r.shuttingDown.Store(tt.shuttingDown)
 
 			rec := httptest.NewRecorder()
 			newAdminServer(r, tt.checks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
@@ -239,30 +237,12 @@ func TestEventsPost(t *testing.T) {
 		{"empty raw", testToken, `{"events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":""}]}`, http.StatusUnprocessableEntity, "events[0].raw"},
 		{"body too large", testToken, `{"events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"` + strings.Repeat("x", 1<<20) + `"}]}`, http.StatusRequestEntityTooLarge, ""},
 	}
+	srv := newServer(slog.New(slog.DiscardHandler), stations, noopSaver, pub)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(tt.body))
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
-			}
-			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), stations, noopSaver, pub).ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantCode {
-				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
-			}
-			if tt.wantProblem == "" {
-				return
-			}
-			var resp struct {
-				Problems map[string]string `json:"problems"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("decode body %q: %v", rec.Body.String(), err)
-			}
-			if _, ok := resp.Problems[tt.wantProblem]; !ok {
-				t.Fatalf("problems = %v, want key %q", resp.Problems, tt.wantProblem)
-			}
+			rec := post(srv, "/v1/events", tt.token, tt.body)
+			wantStatus(t, rec, tt.wantCode)
+			wantProblem(t, rec, tt.wantProblem)
 		})
 	}
 
@@ -274,14 +254,8 @@ func TestEventsPost(t *testing.T) {
 
 	t.Run("publish failure", func(t *testing.T) {
 		failing := publisherFunc(func(context.Context, string, time.Time, []event) error { return errors.New("boom") })
-		req := httptest.NewRequest(http.MethodPost, "/v1/events", strings.NewReader(validEvents))
-		req.Header.Set("Authorization", "Bearer "+testToken)
-		rec := httptest.NewRecorder()
-		newServer(slog.New(slog.DiscardHandler), stations, noopSaver, failing).ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
-		}
+		srv := newServer(slog.New(slog.DiscardHandler), stations, noopSaver, failing)
+		wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusInternalServerError)
 	})
 }
 
@@ -306,31 +280,12 @@ func TestHeartbeatPost(t *testing.T) {
 	}
 	stations, id, _ := testStations(t)
 	pool := stations.pool
-	store := &heartbeatStore{pool: pool}
+	srv := newServer(slog.New(slog.DiscardHandler), stations, &heartbeatStore{pool: pool}, noopPublisher)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/v1/stations/heartbeat", strings.NewReader(tt.body))
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
-			}
-			rec := httptest.NewRecorder()
-			newServer(slog.New(slog.DiscardHandler), stations, store, noopPublisher).ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantCode {
-				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantCode, rec.Body.String())
-			}
-			if tt.wantProblem == "" {
-				return
-			}
-			var resp struct {
-				Problems map[string]string `json:"problems"`
-			}
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("decode body %q: %v", rec.Body.String(), err)
-			}
-			if _, ok := resp.Problems[tt.wantProblem]; !ok {
-				t.Fatalf("problems = %v, want key %q", resp.Problems, tt.wantProblem)
-			}
+			rec := post(srv, "/v1/stations/heartbeat", tt.token, tt.body)
+			wantStatus(t, rec, tt.wantCode)
+			wantProblem(t, rec, tt.wantProblem)
 		})
 	}
 
@@ -344,14 +299,8 @@ func TestHeartbeatPost(t *testing.T) {
 
 	t.Run("store failure", func(t *testing.T) {
 		failing := saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return errors.New("boom") })
-		req := httptest.NewRequest(http.MethodPost, "/v1/stations/heartbeat", strings.NewReader(`{`+required+`}`))
-		req.Header.Set("Authorization", "Bearer "+testToken)
-		rec := httptest.NewRecorder()
-		newServer(slog.New(slog.DiscardHandler), stations, failing, noopPublisher).ServeHTTP(rec, req)
-
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
-		}
+		srv := newServer(slog.New(slog.DiscardHandler), stations, failing, noopPublisher)
+		wantStatus(t, post(srv, "/v1/stations/heartbeat", testToken, `{`+required+`}`), http.StatusInternalServerError)
 	})
 }
 
@@ -359,21 +308,14 @@ func TestRun(t *testing.T) {
 	publicPort, adminPort := freePort(t), freePort(t)
 	_, _, dbURL := testStations(t)
 	topic := testTopic(t)
-	getenv := func(key string) string {
-		switch key {
-		case "PORT":
-			return publicPort
-		case "ADMIN_PORT":
-			return adminPort
-		case "DATABASE_URL":
-			return dbURL
-		case "KAFKA_BROKERS":
-			return strings.Join(kafkaBrokers, ",")
-		case "KAFKA_TOPIC":
-			return topic
-		}
-		return ""
+	env := map[string]string{
+		"PORT":          publicPort,
+		"ADMIN_PORT":    adminPort,
+		"DATABASE_URL":  dbURL,
+		"KAFKA_BROKERS": strings.Join(kafkaBrokers, ","),
+		"KAFKA_TOPIC":   topic,
 	}
+	getenv := func(key string) string { return env[key] }
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -412,18 +354,13 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
-	_, _, dbURL := testStations(t)
-	getenv := func(key string) string {
-		switch key {
-		case "PORT":
-			return taken
-		case "DATABASE_URL":
-			return dbURL
-		case "KAFKA_BROKERS":
-			return strings.Join(kafkaBrokers, ",")
-		}
-		return freePort(t)
+	env := map[string]string{
+		"PORT":          taken,
+		"ADMIN_PORT":    freePort(t),
+		"DATABASE_URL":  testDB(t),
+		"KAFKA_BROKERS": strings.Join(kafkaBrokers, ","),
 	}
+	getenv := func(key string) string { return env[key] }
 
 	done := make(chan error, 1)
 	go func() { done <- run(t.Context(), getenv, io.Discard) }()
@@ -435,6 +372,41 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 		}
 	case <-time.After(6 * time.Second):
 		t.Fatal("run did not return after listen failure")
+	}
+}
+
+// post serves one authenticated JSON POST through h; an empty token sends no Authorization header.
+func post(h http.Handler, path, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func wantStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if rec.Code != want {
+		t.Fatalf("status = %d, want %d (body %q)", rec.Code, want, rec.Body.String())
+	}
+}
+
+// wantProblem asserts key is present in a 422 problems map; an empty key asserts nothing.
+func wantProblem(t *testing.T, rec *httptest.ResponseRecorder, key string) {
+	t.Helper()
+	if key == "" {
+		return
+	}
+	var resp struct {
+		Problems map[string]string `json:"problems"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode body %q: %v", rec.Body.String(), err)
+	}
+	if _, ok := resp.Problems[key]; !ok {
+		t.Fatalf("problems = %v, want key %q", resp.Problems, key)
 	}
 }
 
