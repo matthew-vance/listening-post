@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -40,9 +41,5 @@ func decodeRecord(topic string, in *kgo.Record) (*kgo.Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode: %w", err)
 	}
-	key := msg.ICAO
-	if key == "" {
-		key = e.StationID
-	}
-	return &kgo.Record{Topic: topic, Key: []byte(key), Value: value}, nil
+	return &kgo.Record{Topic: topic, Key: []byte(cmp.Or(msg.ICAO, e.StationID)), Value: value}, nil
 }

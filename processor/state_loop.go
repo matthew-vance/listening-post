@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -94,14 +93,7 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 				l.logger.Warn("warm-up: bad snapshot", "key", icao, "err", err)
 				return
 			}
-			a := newAircraft(icao)
-			a.snap = snap
-			a.partition = r.Partition
-			// Every field is at least as new as last_seen's message; exact per-field times aren't persisted.
-			for _, f := range []string{"callsign", "altitude", "ground_speed", "track", "lat", "lon", "vertical_rate", "squawk", "alert", "emergency", "spi", "on_ground", "position_ts"} {
-				a.fieldTS[f] = snap.LastSeen
-			}
-			l.state.aircraft[icao] = a
+			l.state.restore(snap, r.Partition)
 			loaded++
 		})
 	}
@@ -113,19 +105,9 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 func (l *stateLoop) run(ctx context.Context) error {
 	const sweepEvery = 10 * time.Second
 	lastSweep := l.now()
-	for {
-		// Bounded poll so expiry sweeps happen even when the sky is quiet and nothing arrives.
-		pollCtx, cancel := context.WithDeadline(ctx, lastSweep.Add(sweepEvery))
-		fetches := l.client.PollFetches(pollCtx)
-		cancel()
-		if ctx.Err() != nil {
-			return nil
-		}
-		if err := fetches.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("poll: %w", err)
-		}
-
+	return batchLoop(ctx, l.client, sweepEvery, func(fetches kgo.Fetches) []*kgo.Record {
 		l.mu.Lock()
+		defer l.mu.Unlock()
 		var out []*kgo.Record
 		fetches.EachRecord(func(in *kgo.Record) {
 			var m decodedRecord
@@ -148,26 +130,9 @@ func (l *stateLoop) run(ctx context.Context) error {
 				l.logger.Info("expired", "icao", a.snap.ICAO)
 			}
 		}
-		tracked := len(l.state.aircraft)
-		l.mu.Unlock()
-
 		if len(out) > 0 {
-			if err := l.client.ProduceSync(ctx, out...).FirstErr(); err != nil {
-				if ctx.Err() != nil {
-					return nil
-				}
-				return fmt.Errorf("produce to %s: %w", l.topic, err)
-			}
+			l.logger.Info("state", "snapshots", len(out), "tracked", len(l.state.aircraft))
 		}
-		commitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		err := l.client.CommitUncommittedOffsets(commitCtx)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("commit offsets: %w", err)
-		}
-		l.client.AllowRebalance()
-		if len(out) > 0 {
-			l.logger.Info("state", "snapshots", len(out), "tracked", tracked)
-		}
-	}
+		return out
+	})
 }

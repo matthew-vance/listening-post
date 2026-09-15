@@ -81,7 +81,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	ctx, cancel = context.WithCancel(ctx)
 	defer cancel()
 	errc := make(chan error, 2)
-	go func() { errc <- (&processor{client: decodeClient, out: out, logger: logger}).run(ctx) }()
+	go func() { errc <- decodeLoop(ctx, decodeClient, out, logger) }()
 	go func() { errc <- sl.run(ctx) }()
 	first := <-errc
 	cancel()

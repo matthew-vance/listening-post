@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"time"
 )
@@ -32,6 +33,7 @@ type snapshot struct {
 type aircraft struct {
 	snap      snapshot
 	fieldTS   map[string]time.Time // event ts at which each field was last set
+	floor     time.Time            // restored from a snapshot: every field is at least this new, exact times weren't persisted
 	partition int32                // events.decoded partition its messages arrive on; its snapshots go to the same number on aircraft.state
 }
 
@@ -52,14 +54,13 @@ func (a *aircraft) apply(m decodedRecord) {
 		s.LastSeen = m.TS
 	}
 	s.Messages++
-	if !slices.Contains(s.Stations, m.StationID) {
-		s.Stations = append(s.Stations, m.StationID)
-		slices.Sort(s.Stations)
+	if i, ok := slices.BinarySearch(s.Stations, m.StationID); !ok {
+		s.Stations = slices.Insert(s.Stations, i, m.StationID)
 	}
 
 	var changed []string
 	set := func(name string, present bool, differs bool, assign func()) {
-		if !present || m.TS.Before(a.fieldTS[name]) {
+		if !present || m.TS.Before(a.fieldTS[name]) || m.TS.Before(a.floor) {
 			return
 		}
 		a.fieldTS[name] = m.TS
@@ -81,7 +82,7 @@ func (a *aircraft) apply(m decodedRecord) {
 	set("spi", m.SPI != nil, !eq(s.SPI, m.SPI), func() { s.SPI = m.SPI })
 	set("on_ground", m.OnGround != nil, !eq(s.OnGround, m.OnGround), func() { s.OnGround = m.OnGround })
 	hasPosition := m.Lat != nil && m.Lon != nil
-	set("position_ts", hasPosition, hasPosition && !m.TS.Equal(s.PositionTS), func() { s.PositionTS = m.TS })
+	set("position_ts", hasPosition, !m.TS.Equal(s.PositionTS), func() { s.PositionTS = m.TS })
 
 	s.Updated = changed
 }
@@ -112,6 +113,13 @@ func (s *state) apply(m decodedRecord, partition int32) (snapshot, bool) {
 	return a.snap, len(a.snap.Updated) > 0
 }
 
+// restore seeds an aircraft from a persisted snapshot, replacing whatever was tracked for it.
+func (s *state) restore(snap snapshot, partition int32) {
+	a := newAircraft(snap.ICAO)
+	a.snap, a.floor, a.partition = snap, snap.LastSeen, partition
+	s.aircraft[snap.ICAO] = a
+}
+
 // expire drops aircraft silent for longer than the expiry and returns them, sorted by ICAO, for tombstoning.
 func (s *state) expire(now time.Time) []*aircraft {
 	var gone []*aircraft
@@ -127,9 +135,5 @@ func (s *state) expire(now time.Time) []*aircraft {
 
 // drop forgets every aircraft on the given partitions: another instance owns them now.
 func (s *state) drop(partitions []int32) {
-	for icao, a := range s.aircraft {
-		if slices.Contains(partitions, a.partition) {
-			delete(s.aircraft, icao)
-		}
-	}
+	maps.DeleteFunc(s.aircraft, func(_ string, a *aircraft) bool { return slices.Contains(partitions, a.partition) })
 }

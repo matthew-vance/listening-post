@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -45,17 +46,17 @@ func parseSBS(raw string) (sbsMessage, error) {
 	)
 	m.Generated = joinDateTime(f[6], f[7])
 	m.Logged = joinDateTime(f[8], f[9])
-	m.TransmissionType, err = optInt("transmission_type", f[1], err)
-	m.Altitude, err = optInt("altitude", f[11], err)
-	m.GroundSpeed, err = optFloat("ground_speed", f[12], err)
-	m.Track, err = optFloat("track", f[13], err)
-	m.Lat, err = optFloat("lat", f[14], err)
-	m.Lon, err = optFloat("lon", f[15], err)
-	m.VerticalRate, err = optInt("vertical_rate", f[16], err)
-	m.Alert, err = optFlag("alert", f[18], err)
-	m.Emergency, err = optFlag("emergency", f[19], err)
-	m.SPI, err = optFlag("spi", f[20], err)
-	m.OnGround, err = optFlag("on_ground", f[21], err)
+	m.TransmissionType, err = opt("transmission_type", f[1], err, strconv.Atoi)
+	m.Altitude, err = opt("altitude", f[11], err, strconv.Atoi)
+	m.GroundSpeed, err = opt("ground_speed", f[12], err, parseFloat)
+	m.Track, err = opt("track", f[13], err, parseFloat)
+	m.Lat, err = opt("lat", f[14], err, parseFloat)
+	m.Lon, err = opt("lon", f[15], err, parseFloat)
+	m.VerticalRate, err = opt("vertical_rate", f[16], err, strconv.Atoi)
+	m.Alert, err = opt("alert", f[18], err, parseFlag)
+	m.Emergency, err = opt("emergency", f[19], err, parseFlag)
+	m.SPI, err = opt("spi", f[20], err, parseFlag)
+	m.OnGround, err = opt("on_ground", f[21], err, parseFlag)
 	if err != nil {
 		return sbsMessage{}, err
 	}
@@ -69,42 +70,27 @@ func joinDateTime(date, clock string) string {
 	return date + " " + clock
 }
 
-// The opt* helpers thread one error through the field list so parseSBS reads as a table, not a ladder of ifs.
-
-func optInt(name, s string, prev error) (*int, error) {
+// opt parses one optional field, threading a prior error through so parseSBS reads as a table, not a ladder of ifs.
+func opt[T any](name, s string, prev error, parse func(string) (T, error)) (*T, error) {
 	if prev != nil || s == "" {
 		return nil, prev
 	}
-	v, err := strconv.Atoi(s)
+	v, err := parse(s)
 	if err != nil {
-		return nil, fmt.Errorf("sbs: %s %q: not an integer", name, s)
+		return nil, fmt.Errorf("sbs: %s %q: %w", name, s, err)
 	}
 	return &v, nil
 }
 
-func optFloat(name, s string, prev error) (*float64, error) {
-	if prev != nil || s == "" {
-		return nil, prev
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return nil, fmt.Errorf("sbs: %s %q: not a number", name, s)
-	}
-	return &v, nil
-}
+func parseFloat(s string) (float64, error) { return strconv.ParseFloat(s, 64) }
 
-// optFlag: SBS booleans are -1 (true) or 0 (false).
-func optFlag(name, s string, prev error) (*bool, error) {
-	if prev != nil || s == "" {
-		return nil, prev
-	}
+// parseFlag: SBS booleans are -1 (true) or 0 (false).
+func parseFlag(s string) (bool, error) {
 	switch s {
 	case "-1":
-		v := true
-		return &v, nil
+		return true, nil
 	case "0":
-		v := false
-		return &v, nil
+		return false, nil
 	}
-	return nil, fmt.Errorf("sbs: %s %q: not -1 or 0", name, s)
+	return false, errors.New("not -1 or 0")
 }
