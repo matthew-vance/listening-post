@@ -20,27 +20,19 @@ type service func(ctx context.Context, logger *slog.Logger) error
 // services run together in one process, connected through Kafka rather than each other. Each Run documents its
 // own environment; the names are disjoint so they can share one.
 var services = map[string]service{
-	"gateway": func(ctx context.Context, logger *slog.Logger) error {
-		cfg, err := gateway.LoadConfig(os.Getenv)
+	"gateway":   svc(gateway.LoadConfig, gateway.Run),
+	"processor": svc(processor.LoadConfig, processor.Run),
+	"archiver":  svc(archiver.LoadConfig, archiver.Run),
+}
+
+func svc[C any](load func(func(string) string) (C, error), run func(context.Context, C, *slog.Logger) error) service {
+	return func(ctx context.Context, logger *slog.Logger) error {
+		cfg, err := load(os.Getenv)
 		if err != nil {
 			return err
 		}
-		return gateway.Run(ctx, cfg, logger)
-	},
-	"processor": func(ctx context.Context, logger *slog.Logger) error {
-		cfg, err := processor.LoadConfig(os.Getenv)
-		if err != nil {
-			return err
-		}
-		return processor.Run(ctx, cfg, logger)
-	},
-	"archiver": func(ctx context.Context, logger *slog.Logger) error {
-		cfg, err := archiver.LoadConfig(os.Getenv)
-		if err != nil {
-			return err
-		}
-		return archiver.Run(ctx, cfg, logger)
-	},
+		return run(ctx, cfg, logger)
+	}
 }
 
 func main() {

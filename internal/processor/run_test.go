@@ -13,8 +13,34 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// testConfig makes fresh topics with the given partition count and a Config wired to them.
+func testConfig(t *testing.T, partitions int32, expireSeconds int) Config {
+	t.Helper()
+	in := kafkatest.TopicN(t, partitions)
+	return Config{
+		KafkaBrokers:        kafkatest.Brokers,
+		KafkaRaw:            in,
+		KafkaDecoded:        kafkatest.TopicN(t, partitions),
+		ProcessorGroup:      "g_" + in,
+		KafkaState:          kafkatest.TopicN(t, partitions),
+		ProcessorStateGroup: "gs_" + in,
+		ExpireSeconds:       expireSeconds,
+	}
+}
+
+// rawRecords wraps SBS lines as gateway events from one station, ids in order.
+func rawRecords(topic string, raws ...string) []*kgo.Record {
+	var records []*kgo.Record
+	for i, raw := range raws {
+		v, _ := json.Marshal(wire.Event{StationID: "st", ID: int64(i), TS: time.Now().UTC(), Raw: raw, ReceivedAt: time.Now().UTC()})
+		records = append(records, &kgo.Record{Topic: topic, Key: []byte("st"), Value: v})
+	}
+	return records
+}
+
 func TestRunDecodesTopic(t *testing.T) {
-	in, out, stateTopic := kafkatest.Topic(t), kafkatest.Topic(t), kafkatest.Topic(t)
+	cfg := testConfig(t, 1, 1)
+	in, out, stateTopic := cfg.KafkaRaw, cfg.KafkaDecoded, cfg.KafkaState
 	lines := []string{
 		"MSG,1,1,1,A4BF41,1,2026/09/14,16:05:25.403,2026/09/14,16:05:25.428,AAL433  ,,,,,,,,,,,0",
 		"MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0",
@@ -22,29 +48,8 @@ func TestRunDecodesTopic(t *testing.T) {
 		"MSG,4,1,1,A51958,1,2026/09/14,15:35:33.455,2026/09/14,15:35:33.505,,,505,89,,,-64,,,,,0",
 		"MSG,8,1,1,AB197E,1,2026/09/14,16:05:23.670,2026/09/14,16:05:23.684,,,,,,,,,,,,0",
 	}
-	producer, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var records []*kgo.Record
-	for i, raw := range lines {
-		v, _ := json.Marshal(wire.Event{StationID: "st", ID: int64(i), TS: time.Now().UTC(), Raw: raw, ReceivedAt: time.Now().UTC()})
-		records = append(records, &kgo.Record{Topic: in, Key: []byte("st"), Value: v})
-	}
-	if err := producer.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	producer.Close()
+	kafkatest.Produce(t, rawRecords(in, lines...)...)
 
-	cfg := Config{
-		KafkaBrokers:        kafkatest.Brokers,
-		KafkaRaw:            in,
-		KafkaDecoded:        out,
-		ProcessorGroup:      "g_" + in,
-		KafkaState:          stateTopic,
-		ProcessorStateGroup: "gs_" + in,
-		ExpireSeconds:       1,
-	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
@@ -113,31 +118,11 @@ func TestRunDecodesTopic(t *testing.T) {
 }
 
 func TestStateWarmsFromCompactedTopic(t *testing.T) {
-	in, out, stateTopic := kafkatest.Topic(t), kafkatest.Topic(t), kafkatest.Topic(t)
-	cfg := Config{
-		KafkaBrokers:        kafkatest.Brokers,
-		KafkaRaw:            in,
-		KafkaDecoded:        out,
-		ProcessorGroup:      "g_" + in,
-		KafkaState:          stateTopic,
-		ProcessorStateGroup: "gs_" + in,
-		ExpireSeconds:       3600,
-	}
+	cfg := testConfig(t, 1, 3600)
+	stateTopic := cfg.KafkaState
 	produceRaw := func(raws ...string) {
 		t.Helper()
-		producer, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer producer.Close()
-		var records []*kgo.Record
-		for i, raw := range raws {
-			v, _ := json.Marshal(wire.Event{StationID: "st", ID: int64(i), TS: time.Now().UTC(), Raw: raw, ReceivedAt: time.Now().UTC()})
-			records = append(records, &kgo.Record{Topic: in, Key: []byte("st"), Value: v})
-		}
-		if err := producer.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
+		kafkatest.Produce(t, rawRecords(cfg.KafkaRaw, raws...)...)
 	}
 	runFor := func(want int) []*kgo.Record {
 		t.Helper()
@@ -171,33 +156,16 @@ func TestStateWarmsFromCompactedTopic(t *testing.T) {
 // TestStateSurvivesRebalance runs two instances against 2-partition topics: the second joining moves a partition,
 // and the first must forget those aircraft rather than expire them out from under the new owner.
 func TestStateSurvivesRebalance(t *testing.T) {
-	in, out, stateTopic := kafkatest.TopicN(t, 2), kafkatest.TopicN(t, 2), kafkatest.TopicN(t, 2)
-	cfg := Config{
-		KafkaBrokers:        kafkatest.Brokers,
-		KafkaRaw:            in,
-		KafkaDecoded:        out,
-		ProcessorGroup:      "g_" + in,
-		KafkaState:          stateTopic,
-		ProcessorStateGroup: "gs_" + in,
-		ExpireSeconds:       2,
-	}
+	cfg := testConfig(t, 2, 2)
+	out, stateTopic := cfg.KafkaDecoded, cfg.KafkaState
 	icaos := []string{"A00001", "A00002", "A00003", "A00004", "A00005", "A00006", "A00007", "A00008"}
-	producer, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
-	if err != nil {
-		t.Fatal(err)
+	var positions []string
+	for _, icao := range icaos {
+		positions = append(positions, "MSG,3,1,1,"+icao+",1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0")
 	}
-	defer producer.Close()
 	producePositions := func() {
 		t.Helper()
-		var records []*kgo.Record
-		for i, icao := range icaos {
-			raw := "MSG,3,1,1," + icao + ",1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0"
-			v, _ := json.Marshal(wire.Event{StationID: "st", ID: int64(i), TS: time.Now().UTC(), Raw: raw, ReceivedAt: time.Now().UTC()})
-			records = append(records, &kgo.Record{Topic: in, Key: []byte("st"), Value: v})
-		}
-		if err := producer.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
-			t.Fatal(err)
-		}
+		kafkatest.Produce(t, rawRecords(cfg.KafkaRaw, positions...)...)
 	}
 	start := func() (context.CancelFunc, chan error) {
 		ctx, cancel := context.WithCancel(t.Context())

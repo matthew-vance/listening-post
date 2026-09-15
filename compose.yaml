@@ -94,6 +94,7 @@ services:
       retries: 10
 
   # One-shot: declares topics and exits. Re-runs harmlessly on every `up` (--if-not-exists).
+  # Names must match the constants in internal/wire/wire.go.
   kafka-init:
     image: apache/kafka:4.3.1
     depends_on:

@@ -4,9 +4,9 @@ import sqlite3
 import time
 from collections.abc import Callable
 from typing import TypedDict
-from urllib.error import HTTPError, URLError
 
-from station.gateway import post_json
+from station import gateway
+from station.ingest import DB_PATH
 
 log = logging.getLogger("publish")
 
@@ -45,17 +45,15 @@ def publish_once(db: sqlite3.Connection, post: Callable[[list[Event]], None], ba
 
 
 def main() -> None:
-    url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
-    token = os.environ["STATION_TOKEN"]  # checked once by the supervisor
     batch_size = int(os.environ.get("PUBLISH_BATCH_SIZE", "500"))
     poll = float(os.environ.get("POLL_SECONDS", "2"))
     retry = float(os.environ.get("RETRY_SECONDS", "5"))
-    db = open_db(os.environ.get("DB_PATH", "events.db"))
+    db = open_db(DB_PATH)
 
     def post(events: list[Event]) -> None:
-        post_json(url, token, "/v1/events", {"events": events}, timeout=10)
+        gateway.post_json(gateway.URL, gateway.TOKEN, "/v1/events", {"events": events})
 
-    log.info("publishing to %s", url)
+    log.info("publishing to %s", gateway.URL)
     try:
         while True:
             try:
@@ -63,7 +61,7 @@ def main() -> None:
                     time.sleep(poll)
             # ponytail: every failure retries forever, so a 4xx wedges the queue at its head.
             # Gateway and publish ship from one repo, so that's a deploy mismatch; add dead-lettering if it ever happens.
-            except (HTTPError, URLError, TimeoutError) as e:
+            except gateway.POST_ERRORS as e:
                 log.warning("post failed: %s", e)
                 time.sleep(retry)
     finally:

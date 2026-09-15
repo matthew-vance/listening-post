@@ -6,9 +6,9 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.error import HTTPError, URLError
 
-from station.gateway import post_json
+from station import gateway
+from station.ingest import DB_PATH
 
 log = logging.getLogger("heartbeat")
 
@@ -34,7 +34,7 @@ def read_buffer(db: sqlite3.Connection) -> BufferStats:
     depth, oldest_ts, seq = db.execute(
         """
         SELECT (SELECT count(*) FROM events),
-               (SELECT min(ts) FROM events),
+               (SELECT ts FROM events ORDER BY id LIMIT 1),
                (SELECT seq FROM sqlite_sequence WHERE name = 'events')
         """
     ).fetchone()
@@ -77,33 +77,26 @@ def build_report(
 
 
 def sample_buffer(db_path: str) -> BufferStats:
-    # Read-only: heartbeat must never create the table or take a write lock. The file or table may not exist yet
-    # on a fresh station; that's an empty buffer, not a failure.
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as db:
-            return read_buffer(db)
-    except sqlite3.OperationalError as e:
-        log.warning("buffer unreadable (%s); reporting empty", e)
-        return BufferStats(depth=0, oldest_ts=None, seq=0)
+    # Read-only: heartbeat must never create the table or take a write lock. The supervisor creates the file and
+    # schema before starting us, so an unreadable buffer is a real fault: let it raise and be restarted.
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as db:
+        return read_buffer(db)
 
 
 def main() -> None:
-    url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
-    token = os.environ["STATION_TOKEN"]  # checked once by the supervisor
-    db_path = os.environ.get("DB_PATH", "events.db")
     interval = float(os.environ.get("INTERVAL_SECONDS", "60"))
-    disk_path = os.path.dirname(os.path.abspath(db_path))
+    disk_path = os.path.dirname(os.path.abspath(DB_PATH))
 
-    log.info("reporting to %s every %ss", url, interval)
+    log.info("reporting to %s every %ss", gateway.URL, interval)
     state: State | None = None
     while True:
-        stats = sample_buffer(db_path)
+        stats = sample_buffer(DB_PATH)
         disk_free = shutil.disk_usage(disk_path).free
         report, state = build_report(datetime.now(UTC), uptime_seconds(), disk_free, stats, state)
         try:
-            post_json(url, token, "/v1/stations/heartbeat", report, timeout=10)
+            gateway.post_json(gateway.URL, gateway.TOKEN, "/v1/stations/heartbeat", report)
             log.info("sent heartbeat: depth=%d rate=%s", stats.depth, report.get("event_rate", "n/a"))
-        except (HTTPError, URLError, TimeoutError) as e:
+        except gateway.POST_ERRORS as e:
             log.warning("heartbeat failed: %s", e)
         time.sleep(interval)
 

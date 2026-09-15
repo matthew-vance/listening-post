@@ -84,7 +84,7 @@ def main() -> None:
         sys.exit(1)
     # Create the file, schema, and WAL mode before any child opens the buffer. Switching a database to WAL
     # requires an exclusive lock, which fails if publish is creating the table at the same moment.
-    ingest.open_db(os.environ.get("DB_PATH", "events.db")).close()
+    ingest.open_db(ingest.DB_PATH).close()
     try:
         supervise(TARGETS, float(os.environ.get("RESTART_SECONDS", "5")))
     except KeyboardInterrupt:

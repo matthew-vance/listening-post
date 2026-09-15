@@ -46,10 +46,7 @@ func handleEventsPost(logger *slog.Logger, pub eventPublisher) http.Handler {
 			return
 		}
 		station := stationFrom(r.Context())
-		// publish.py gives up after 10s; answer well inside that so a slow broker reads as our 500, not its timeout
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		if err := pub.Publish(ctx, station, time.Now(), req.Events); err != nil {
+		if err := pub.Publish(r.Context(), station, time.Now(), req.Events); err != nil {
 			logger.Error("publish events", "station", station, "count", len(req.Events), "err", err)
 			fail(w, http.StatusInternalServerError, "internal")
 			return

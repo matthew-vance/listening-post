@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS events (
 
 log = logging.getLogger("ingest")
 
+DB_PATH = os.environ.get("DB_PATH", "events.db")  # the buffer every station loop shares
+
 
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
@@ -90,7 +92,7 @@ def main() -> None:
     port = int(os.environ.get("DUMP1090_PORT", "30003"))
     batch_size = int(os.environ.get("INGEST_BATCH_SIZE", "100"))
     flush_after = timedelta(seconds=float(os.environ.get("FLUSH_SECONDS", "5")))
-    db = open_db(os.environ.get("DB_PATH", "events.db"))
+    db = open_db(DB_PATH)
 
     try:
         while True:

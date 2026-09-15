@@ -103,6 +103,19 @@ func TopicN(t *testing.T, partitions int32) string {
 	return name
 }
 
+// Produce writes records and waits for the broker's ack.
+func Produce(t *testing.T, records ...*kgo.Record) {
+	t.Helper()
+	client, err := kgo.NewClient(kgo.SeedBrokers(Brokers...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Consume reads n records from the start of a topic.
 func Consume(t *testing.T, topic string, n int) []*kgo.Record {
 	t.Helper()

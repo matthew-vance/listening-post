@@ -72,7 +72,7 @@ just station-revoke 3f2a      # kills every token; soft: rows and heartbeats rem
 
 Anywhere a recipe takes a station, a UUID or an unambiguous prefix works (as with git commits).
 
-Put `STATION_TOKEN=<token>` in the Pi's `.env` (see `.env.example`; gitignored) — `just` loads it automatically, so `just publish` and `just heartbeat` pick it up. None of this needs a gateway restart.
+Set `STATION_TOKEN=<token>` in the station's environment. None of this needs a gateway restart.
 
 #### Rotating a token
 
@@ -80,7 +80,7 @@ Rotation is add → switch → revoke, so the station never sees a 401:
 
 ```sh
 just station-token-add 3f2a                    # prints a new STATION_TOKEN; the old one still works
-# update the Pi's .env, restart station, confirm station=<uuid> still appears in the gateway log
+# update STATION_TOKEN on the Pi, restart station, confirm station=<uuid> still appears in the gateway log
 just station-tokens 3f2a                       # hash prefixes with created/revoked times
 just station-token-revoke 3f2a <old prefix>
 ```
@@ -92,13 +92,12 @@ Public routes (both require `Authorization: Bearer <token>`):
 - `POST /v1/events` — a batch of raw SBS-1 lines from the station's buffer.
 - `POST /v1/stations/heartbeat` — periodic station status: uptime, free disk, buffer depth, and optional diagnostics (see `heartbeatRequest` in `internal/gateway/handlers.go`).
 
+The public API listens on 8080 and the internal `/healthz` and `/readyz` probes on 9091.
+
 | Variable        | Default         | Purpose                                  |
 |-----------------|-----------------|------------------------------------------|
-| `PORT`          | `8080`          | Public API (`/v1/*`)                     |
-| `ADMIN_PORT`    | `9091`          | Internal `/healthz` and `/readyz` probes |
 | `DATABASE_URL`  | *(required)*    | Postgres connection URL                  |
 | `KAFKA_BROKERS` | *(required)*    | Comma-separated bootstrap brokers        |
-| `KAFKA_RAW`     | `events.raw`    | Topic events are published to            |
 
 ### Database
 
@@ -130,8 +129,6 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 | Variable        | Default      | Purpose                                            |
 |-----------------|--------------|----------------------------------------------------|
 | `KAFKA_BROKERS` | *(required)* | Comma-separated bootstrap brokers                  |
-| `KAFKA_RAW`     | `events.raw` | Topic to archive                                   |
-| `ARCHIVER_GROUP`| `archiver`   | Consumer group                                     |
 | `ARCHIVE_DIR`   | *(required)* | Root directory for Parquet files                   |
 | `FLUSH_RECORDS` | `10000`      | Write a batch after this many records              |
 | `FLUSH_SECONDS` | `300`        | …or after this long since the last write           |
@@ -178,11 +175,6 @@ It consumes `events.decoded` rather than deriving state inside the decode loop b
 | Variable                | Default           | Purpose                                   |
 |-------------------------|-------------------|-------------------------------------------|
 | `KAFKA_BROKERS`         | *(required)*      | Comma-separated bootstrap brokers         |
-| `KAFKA_RAW`             | `events.raw`      | Raw topic to read                         |
-| `KAFKA_DECODED`         | `events.decoded`  | Decoded topic to write                    |
-| `PROCESSOR_GROUP`       | `processor`       | Decode loop consumer group                |
-| `KAFKA_STATE`           | `aircraft.state`  | State topic to write                      |
-| `PROCESSOR_STATE_GROUP` | `processor-state` | State loop consumer group                 |
 | `EXPIRE_SECONDS`        | `300`             | Tombstone an aircraft silent this long    |
 
 #### Map
@@ -191,9 +183,9 @@ It consumes `events.decoded` rather than deriving state inside the decode loop b
 
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created: `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created, and their names are constants in `internal/wire/`: `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
-The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`, the one definition every side uses). It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once and consumers should dedupe on `(station_id, id)`.
+The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`, the one definition every side uses). It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates (they carry distinct offsets); the state fold tolerates them.
 
 - `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
 - Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.

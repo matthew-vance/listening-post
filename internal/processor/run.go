@@ -2,12 +2,12 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"golang.org/x/sync/errgroup"
 )
 
 // Run decodes events.raw onto events.decoded and folds events.decoded into aircraft.state until ctx is
@@ -37,16 +37,12 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	logger.Info("processing", "in", cfg.KafkaRaw, "out", cfg.KafkaDecoded, "state", cfg.KafkaState)
 
 	// Either loop failing stops both; ctx cancellation stops both cleanly.
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	errc := make(chan error, 2)
-	go func() { errc <- decodeLoop(ctx, decodeClient, cfg.KafkaDecoded, logger) }()
-	go func() { errc <- sl.run(ctx) }()
-	first := <-errc
-	cancel()
-	second := <-errc
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return decodeLoop(ctx, decodeClient, cfg.KafkaDecoded, logger) })
+	g.Go(func() error { return sl.run(ctx) })
+	err = g.Wait()
 	logger.Info("shut down")
-	return errors.Join(first, second)
+	return err
 }
 
 // consumerClient builds a group consumer that commits manually and holds rebalances while a batch is in flight,

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type stationKey struct{}
@@ -35,6 +36,18 @@ func bearerAuth(logger *slog.Logger, stations stationLookup) func(http.Handler) 
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stationKey{}, station)))
+		})
+	}
+}
+
+// withTimeout bounds every dependency call a request makes. The station scripts give up after 10s; answering
+// well inside that makes a slow broker or database read as our 500, not their timeout.
+func withTimeout(d time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), d)
+			defer cancel()
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

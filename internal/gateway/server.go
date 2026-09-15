@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync/atomic"
+	"time"
 )
 
 type readiness struct {
@@ -13,9 +14,9 @@ type readiness struct {
 
 func newServer(logger *slog.Logger, stations stationLookup, store heartbeatSaver, pub eventPublisher) http.Handler {
 	mux := http.NewServeMux()
-	auth := bearerAuth(logger, stations)
-	mux.Handle("POST /v1/events", auth(handleEventsPost(logger, pub)))
-	mux.Handle("POST /v1/stations/heartbeat", auth(handleHeartbeatPost(logger, store)))
+	auth, timeout := bearerAuth(logger, stations), withTimeout(5*time.Second)
+	mux.Handle("POST /v1/events", timeout(auth(handleEventsPost(logger, pub))))
+	mux.Handle("POST /v1/stations/heartbeat", timeout(auth(handleHeartbeatPost(logger, store))))
 	return mux
 }
 

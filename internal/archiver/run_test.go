@@ -22,10 +22,6 @@ func TestRunArchivesTopic(t *testing.T) {
 	other := "8ee63520-fa04-424f-b05a-60065c207863"
 
 	// 25 records across two stations; ids are the record index
-	producer, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
-	if err != nil {
-		t.Fatal(err)
-	}
 	var records []*kgo.Record
 	for i := range 25 {
 		st := station
@@ -35,10 +31,7 @@ func TestRunArchivesTopic(t *testing.T) {
 		v, _ := json.Marshal(wire.Event{StationID: st, ID: int64(i), TS: t0.Add(time.Duration(i) * time.Second), Raw: fmt.Sprintf("MSG,%d", i), ReceivedAt: t0})
 		records = append(records, &kgo.Record{Topic: topic, Key: []byte(st), Value: v})
 	}
-	if err := producer.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
-	producer.Close()
+	kafkatest.Produce(t, records...)
 
 	dir := t.TempDir()
 	group := "g_" + topic

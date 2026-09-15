@@ -13,9 +13,9 @@ import (
 // transmission_type, generated, logged) stay on the embedding structs.
 type payload struct {
 	Callsign     string   `json:"callsign,omitempty"`
-	Altitude     *int     `json:"altitude,omitempty"`      // feet
-	GroundSpeed  *float64 `json:"ground_speed,omitempty"`  // knots
-	Track        *float64 `json:"track,omitempty"`         // degrees
+	Altitude     *int     `json:"altitude,omitempty"`     // feet
+	GroundSpeed  *float64 `json:"ground_speed,omitempty"` // knots
+	Track        *float64 `json:"track,omitempty"`        // degrees
 	Lat          *float64 `json:"lat,omitempty"`
 	Lon          *float64 `json:"lon,omitempty"`
 	VerticalRate *int     `json:"vertical_rate,omitempty"` // ft/min

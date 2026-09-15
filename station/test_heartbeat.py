@@ -1,10 +1,8 @@
 import sqlite3
-import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-from station.heartbeat import BufferStats, State, build_report, read_buffer, sample_buffer
+from station.heartbeat import BufferStats, State, build_report, read_buffer
 from station.ingest import SCHEMA
 
 T0 = datetime(2026, 9, 14, 14, 0, 0, tzinfo=UTC)
@@ -25,14 +23,6 @@ class ReadBufferTest(unittest.TestCase):
         self.db.commit()
 
         self.assertEqual(read_buffer(self.db), BufferStats(depth=2, oldest_ts="t2", seq=3))
-
-    def test_sample_reports_empty_when_file_or_table_is_missing(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp, self.assertLogs("heartbeat", "WARNING") as logs:
-            path = str(Path(tmp) / "events.db")
-            self.assertEqual(sample_buffer(path).depth, 0)  # no file yet
-            sqlite3.connect(path).close()  # file created by another process, table not yet
-            self.assertEqual(sample_buffer(path).depth, 0)
-        self.assertEqual(len(logs.output), 2)
 
 
 class BuildReportTest(unittest.TestCase):

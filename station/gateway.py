@@ -1,9 +1,17 @@
 import json
+import os
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+URL = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
+TOKEN = os.environ.get("STATION_TOKEN", "")  # presence is checked once, by the supervisor
 
-def post_json(url: str, token: str, path: str, body: dict[str, Any], timeout: float) -> None:
+# What post_json raises on failure; callers retry on exactly these.
+POST_ERRORS = (HTTPError, URLError, TimeoutError)
+
+
+def post_json(url: str, token: str, path: str, body: dict[str, Any], timeout: float = 10) -> None:
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
     req = Request(url + path, data=json.dumps(body).encode(), headers=headers, method="POST")
     with urlopen(req, timeout=timeout):  # raises HTTPError on non-2xx, URLError on connection failure
