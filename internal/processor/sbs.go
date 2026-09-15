@@ -7,21 +7,15 @@ import (
 	"strings"
 )
 
-// sbsMessage is one SBS-1 BaseStation line (http://woodair.net/sbs/article/barebones42_socket_data.htm) as JSON.
-// A field is present iff the line carried it; pointers + omitempty keep absent fields out of the document.
-// Session, aircraft, and flight ids (fields 3, 4, 6) are dropped: dump1090 always emits 1.
-type sbsMessage struct {
-	MessageType      string `json:"message_type"`
-	TransmissionType *int   `json:"transmission_type,omitempty"`
-	ICAO             string `json:"icao,omitempty"`
-	// Generated/logged are the receiver's clock in its local zone with no offset — kept verbatim, not parsed.
-	// The envelope's ts (ingest clock, UTC) is the authoritative event time.
-	Generated    string   `json:"generated,omitempty"`
-	Logged       string   `json:"logged,omitempty"`
+// payload is the SBS field block shared by a decoded message and an aircraft state snapshot: the twelve
+// attributes that travel with an aircraft's position. A field is present iff the line carried it; pointers +
+// omitempty keep absent fields out of the document. The fields that differ between the two (icao, message_type,
+// transmission_type, generated, logged) stay on the embedding structs.
+type payload struct {
 	Callsign     string   `json:"callsign,omitempty"`
-	Altitude     *int     `json:"altitude,omitempty"`     // feet
-	GroundSpeed  *float64 `json:"ground_speed,omitempty"` // knots
-	Track        *float64 `json:"track,omitempty"`        // degrees
+	Altitude     *int     `json:"altitude,omitempty"`      // feet
+	GroundSpeed  *float64 `json:"ground_speed,omitempty"`  // knots
+	Track        *float64 `json:"track,omitempty"`         // degrees
 	Lat          *float64 `json:"lat,omitempty"`
 	Lon          *float64 `json:"lon,omitempty"`
 	VerticalRate *int     `json:"vertical_rate,omitempty"` // ft/min
@@ -30,6 +24,19 @@ type sbsMessage struct {
 	Emergency    *bool    `json:"emergency,omitempty"`
 	SPI          *bool    `json:"spi,omitempty"`
 	OnGround     *bool    `json:"on_ground,omitempty"`
+}
+
+// sbsMessage is one SBS-1 BaseStation line (http://woodair.net/sbs/article/barebones42_socket_data.htm) as JSON.
+// Session, aircraft, and flight ids (fields 3, 4, 6) are dropped: dump1090 always emits 1.
+type sbsMessage struct {
+	MessageType      string `json:"message_type"`
+	TransmissionType *int   `json:"transmission_type,omitempty"`
+	ICAO             string `json:"icao,omitempty"`
+	// Generated/logged are the receiver's clock in its local zone with no offset — kept verbatim, not parsed.
+	// The envelope's ts (ingest clock, UTC) is the authoritative event time.
+	Generated string `json:"generated,omitempty"`
+	Logged    string `json:"logged,omitempty"`
+	payload
 }
 
 const sbsFields = 22
@@ -41,7 +48,7 @@ func parseSBS(raw string) (sbsMessage, error) {
 		return sbsMessage{}, fmt.Errorf("sbs: %d fields, want %d", len(f), sbsFields)
 	}
 	var (
-		m   = sbsMessage{MessageType: f[0], ICAO: f[4], Callsign: strings.TrimSpace(f[10]), Squawk: f[17]}
+		m   = sbsMessage{MessageType: f[0], ICAO: f[4], payload: payload{Callsign: strings.TrimSpace(f[10]), Squawk: f[17]}}
 		err error
 	)
 	m.Generated = joinDateTime(f[6], f[7])

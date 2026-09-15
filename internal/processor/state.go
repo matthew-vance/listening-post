@@ -9,25 +9,14 @@ import (
 
 // snapshot is the wire format on aircraft.state: the full current picture of one aircraft, never a delta.
 type snapshot struct {
-	ICAO         string    `json:"icao"`
-	Callsign     string    `json:"callsign,omitempty"`
-	Altitude     *int      `json:"altitude,omitempty"`
-	GroundSpeed  *float64  `json:"ground_speed,omitempty"`
-	Track        *float64  `json:"track,omitempty"`
-	Lat          *float64  `json:"lat,omitempty"`
-	Lon          *float64  `json:"lon,omitempty"`
-	VerticalRate *int      `json:"vertical_rate,omitempty"`
-	Squawk       string    `json:"squawk,omitempty"`
-	Alert        *bool     `json:"alert,omitempty"`
-	Emergency    *bool     `json:"emergency,omitempty"`
-	SPI          *bool     `json:"spi,omitempty"`
-	OnGround     *bool     `json:"on_ground,omitempty"`
-	FirstSeen    time.Time `json:"first_seen"`
-	LastSeen     time.Time `json:"last_seen"`
-	PositionTS   time.Time `json:"position_ts,omitempty"`
-	Stations     []string  `json:"stations"`
-	Messages     int64     `json:"messages"`
-	Updated      []string  `json:"updated"` // fields that changed in this snapshot
+	ICAO       string    `json:"icao"`
+	FirstSeen  time.Time `json:"first_seen"`
+	LastSeen   time.Time `json:"last_seen"`
+	PositionTS time.Time `json:"position_ts,omitempty"`
+	Stations   []string  `json:"stations"`
+	Messages   int64     `json:"messages"`
+	Updated    []string  `json:"updated"` // fields that changed in this snapshot
+	payload
 }
 
 type aircraft struct {
