@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,16 +33,21 @@ type eventRecord struct {
 }
 
 // decode turns a topic record into a row. A value that isn't a gateway event is still archived — sushi principle —
-// with its bytes in raw and zeroed fields, which routes it to the dt=unknown/station=unknown partition.
-func decode(rec *kgo.Record) row {
+// with its bytes in raw and zeroed fields, which routes it to the dt=unknown/station=unknown partition; the
+// returned error says why.
+func decode(rec *kgo.Record) (row, error) {
 	r := row{KafkaPartition: rec.Partition, KafkaOffset: rec.Offset, KafkaTimestamp: rec.Timestamp}
 	var e eventRecord
-	if err := json.Unmarshal(rec.Value, &e); err != nil || e.StationID == "" || e.TS.IsZero() {
+	err := json.Unmarshal(rec.Value, &e)
+	if err == nil && (e.StationID == "" || e.TS.IsZero()) {
+		err = errors.New("missing station_id or ts")
+	}
+	if err != nil {
 		r.Raw = string(rec.Value)
-		return r
+		return r, err
 	}
 	r.StationID, r.ID, r.TS, r.Raw, r.ReceivedAt = e.StationID, e.ID, e.TS, e.Raw, e.ReceivedAt
-	return r
+	return r, nil
 }
 
 // partition is the Hive-style directory for a row, keyed on event date so late backlogs land in the right day.

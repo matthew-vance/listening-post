@@ -41,8 +41,11 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	logger := slog.New(slog.NewTextHandler(stderr, nil))
 
 	brokers, dir := getenv("KAFKA_BROKERS"), getenv("ARCHIVE_DIR")
-	if brokers == "" || dir == "" {
-		return errors.New("KAFKA_BROKERS and ARCHIVE_DIR must be set")
+	if brokers == "" {
+		return errors.New("KAFKA_BROKERS is not set")
+	}
+	if dir == "" {
+		return errors.New("ARCHIVE_DIR is not set")
 	}
 	flushRecords, err := strconv.Atoi(cmp.Or(getenv("FLUSH_RECORDS"), "10000"))
 	if err != nil {
@@ -71,7 +74,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 
 	a := &archiver{
 		client:       client,
-		store:        &dirStore{root: dir},
+		dir:          dir,
 		logger:       logger,
 		flushRecords: flushRecords,
 		flushAfter:   time.Duration(flushSeconds) * time.Second,

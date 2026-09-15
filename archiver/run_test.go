@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -41,36 +40,29 @@ func TestRunArchivesTopic(t *testing.T) {
 
 	dir := t.TempDir()
 	group := "g_" + topic
-	getenv := func(key string) string {
-		return map[string]string{
-			"KAFKA_BROKERS": strings.Join(kafkaBrokers, ","),
-			"KAFKA_TOPIC":   topic,
-			"KAFKA_GROUP":   group,
-			"ARCHIVE_DIR":   dir,
-			"FLUSH_RECORDS": "10",
-			"FLUSH_SECONDS": "1",
-		}[key]
+	env := map[string]string{
+		"KAFKA_BROKERS": strings.Join(kafkaBrokers, ","),
+		"KAFKA_TOPIC":   topic,
+		"KAFKA_GROUP":   group,
+		"ARCHIVE_DIR":   dir,
+		"FLUSH_RECORDS": "10",
+		"FLUSH_SECONDS": "1",
 	}
+	getenv := func(key string) string { return env[key] }
 
-	runUntil := func(dir string, want int) []row {
-		t.Helper()
-		ctx, cancel := context.WithCancel(t.Context())
-		done := make(chan error, 1)
-		go func() { done <- run(ctx, getenv, io.Discard) }()
-		var rows []row
-		deadline := time.Now().Add(20 * time.Second)
-		for len(rows) < want && time.Now().Before(deadline) {
-			time.Sleep(200 * time.Millisecond)
-			rows = readArchive(t, dir)
-		}
-		cancel()
-		if err := <-done; err != nil {
-			t.Fatalf("run: %v", err)
-		}
-		return readArchive(t, dir)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, getenv, io.Discard) }()
+	var rows []row
+	for deadline := time.Now().Add(20 * time.Second); len(rows) < 25 && time.Now().Before(deadline); {
+		time.Sleep(200 * time.Millisecond)
+		rows = readArchive(t, dir)
 	}
-
-	rows := runUntil(dir, 25)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	rows = readArchive(t, dir)
 	if len(rows) != 25 {
 		t.Fatalf("archived %d rows, want 25", len(rows))
 	}
@@ -88,14 +80,8 @@ func TestRunArchivesTopic(t *testing.T) {
 
 	// offsets were committed: a second run into a fresh dir archives nothing
 	fresh := t.TempDir()
-	getenvFresh := getenv
-	getenv = func(key string) string {
-		if key == "ARCHIVE_DIR" {
-			return fresh
-		}
-		return getenvFresh(key)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	env["ARCHIVE_DIR"] = fresh
+	ctx, cancel = context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	if err := run(ctx, getenv, io.Discard); err != nil {
 		t.Fatal(err)
@@ -112,11 +98,7 @@ func readArchive(t *testing.T, dir string) []row {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".parquet") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, err := parquet.Read[row](bytes.NewReader(data), int64(len(data)))
+		got, err := parquet.ReadFile[row](path)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}

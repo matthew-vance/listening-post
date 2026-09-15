@@ -46,7 +46,10 @@ func TestDecode(t *testing.T) {
 		Key:   []byte(station),
 		Value: []byte(`{"station_id":"` + station + `","id":420302,"ts":"2026-09-14T15:00:17.521Z","raw":"MSG,7,1,1,A519","received_at":"2026-09-14T15:00:20.5Z"}`),
 	}
-	r := decode(rec)
+	r, err := decode(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if r.StationID != station || r.ID != 420302 || !r.TS.Equal(t0) || r.Raw != "MSG,7,1,1,A519" ||
 		!r.ReceivedAt.Equal(time.Date(2026, 9, 14, 15, 0, 20, 500000000, time.UTC)) ||
 		r.KafkaPartition != 2 || r.KafkaOffset != 99 || !r.KafkaTimestamp.Equal(t0.Add(3*time.Second)) {
@@ -59,9 +62,9 @@ func TestDecode(t *testing.T) {
 
 func TestDecodeGarbageIsKeptUnderUnknown(t *testing.T) {
 	rec := &kgo.Record{Partition: 0, Offset: 5, Timestamp: t0, Value: []byte("not json")}
-	r := decode(rec)
-	if r.Raw != "not json" || r.KafkaOffset != 5 {
-		t.Fatalf("garbage record must keep its bytes and offset: %+v", r)
+	r, err := decode(rec)
+	if err == nil || r.Raw != "not json" || r.KafkaOffset != 5 {
+		t.Fatalf("garbage record must keep its bytes and offset and report why: %+v, %v", r, err)
 	}
 	if p := r.partition(); p != "dt=unknown/station=unknown" {
 		t.Fatalf("partition = %q, want unknown", p)

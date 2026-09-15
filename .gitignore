@@ -1,4 +1,6 @@
 /gateway/gateway
+/archiver/archiver
+/processor/processor
 __pycache__/
 *.db
 *.db-wal

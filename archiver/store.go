@@ -1,19 +1,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 )
 
-type dirStore struct {
-	root string
-}
-
-// Put writes atomically: readers (DuckDB, notebooks) never see a partial file.
-func (s *dirStore) Put(_ context.Context, path string, data []byte) error {
-	full := filepath.Join(s.root, filepath.FromSlash(path))
+// putFile writes atomically: readers (DuckDB, notebooks) never see a partial file.
+func putFile(root, path string, data []byte) error {
+	full := filepath.Join(root, filepath.FromSlash(path))
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
