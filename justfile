@@ -39,20 +39,9 @@ down:
 dump1090:
     TZ=UTC dump1090 --net --quiet --fix --net-bind-address 127.0.0.1
 
-# Start the ingest script (env vars documented in README)
-[working-directory: 'ingest']
-ingest:
-    python3 ingest.py
-
-# Start the publish script (env vars documented in README)
-[working-directory: 'publish']
-publish:
-    python3 publish.py
-
-# Start the heartbeat script (env vars documented in README)
-[working-directory: 'heartbeat']
-heartbeat:
-    python3 heartbeat.py
+# Run the Pi side: ingest, publish, and heartbeat under one supervisor (env vars documented in README)
+station:
+    python3 -m station
 
 # Register a station and mint its first token (see scripts/stations.sh)
 station-add:
@@ -77,23 +66,14 @@ station-list:
     scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
-test: test-server test-ingest test-publish test-heartbeat test-map
+test: test-server test-station test-map
 
 # Needs Docker: starts throwaway Postgres and Kafka containers. `go test -short ./...` skips those.
 test-server:
     go test ./...
 
-[working-directory: 'ingest']
-test-ingest:
-    python3 -m unittest
-
-[working-directory: 'publish']
-test-publish:
-    python3 -m unittest
-
-[working-directory: 'heartbeat']
-test-heartbeat:
-    python3 -m unittest
+test-station:
+    python3 -m unittest discover -s station -t .
 
 [working-directory: 'map']
 test-map:

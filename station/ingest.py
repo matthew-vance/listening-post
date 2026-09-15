@@ -1,9 +1,7 @@
 import logging
 import os
-import signal
 import socket
 import sqlite3
-import sys
 import time
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -21,7 +19,16 @@ log = logging.getLogger("ingest")
 
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
-    db.execute("PRAGMA journal_mode=WAL")  # publish reads while we write
+    # Switching to WAL needs the file to itself. On a fresh buffer publish may be creating the table at the same
+    # moment (the supervisor starts both at once), and SQLite's busy timeout doesn't cover this case, so retry.
+    for attempt in range(50):
+        try:
+            db.execute("PRAGMA journal_mode=WAL")  # publish reads while we write
+            break
+        except sqlite3.OperationalError:
+            if attempt == 49:
+                raise
+            time.sleep(0.1)
     db.execute("PRAGMA synchronous=NORMAL")  # fsync at checkpoint, not per commit; only power loss can lose rows
     db.execute(SCHEMA)
     db.commit()
@@ -88,15 +95,11 @@ def connect(host: str, port: int, idle_timeout: float) -> Iterator[str]:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
     host = os.environ.get("DUMP1090_HOST", "localhost")
     port = int(os.environ.get("DUMP1090_PORT", "30003"))
-    batch_size = int(os.environ.get("BATCH_SIZE", "100"))
+    batch_size = int(os.environ.get("INGEST_BATCH_SIZE", "100"))
     flush_after = timedelta(seconds=float(os.environ.get("FLUSH_SECONDS", "5")))
-    db = open_db(os.environ.get("DB_PATH", "../events.db"))
+    db = open_db(os.environ.get("DB_PATH", "events.db"))
 
     try:
         while True:
@@ -111,12 +114,3 @@ def main() -> None:
         db.close()
         log.info("shut down")
 
-
-if __name__ == "__main__":
-    # SystemExit unwinds through the loop like KeyboardInterrupt does, so both paths
-    # close the socket (context managers) and the db (finally) before exiting.
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    try:
-        main()
-    except KeyboardInterrupt:
-        pass

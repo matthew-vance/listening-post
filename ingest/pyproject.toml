@@ -1,6 +1,0 @@
-[project]
-name = "ingest"
-version = "0.1.0"
-description = "Buffers dump1090 SBS-1 messages into SQLite"
-requires-python = ">=3.11"
-dependencies = []

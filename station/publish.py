@@ -1,23 +1,14 @@
 import json
 import logging
 import os
-import signal
 import sqlite3
-import sys
 import time
 from collections.abc import Callable
 from typing import TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-# Keep in sync with ingest/ingest.py. Duplicated on purpose: two deployables, no shared package.
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-    id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts  TEXT    NOT NULL,
-    raw TEXT    NOT NULL
-)
-"""
+from station.ingest import SCHEMA
 
 log = logging.getLogger("publish")
 
@@ -66,19 +57,12 @@ def publish_once(db: sqlite3.Connection, post: Callable[[list[Event]], None], ba
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
     url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
-    token = os.environ.get("STATION_TOKEN")
-    if not token:
-        log.error("STATION_TOKEN is not set; mint one with `just station-add`")
-        sys.exit(1)
-    batch_size = int(os.environ.get("BATCH_SIZE", "500"))
+    token = os.environ["STATION_TOKEN"]  # checked once by the supervisor
+    batch_size = int(os.environ.get("PUBLISH_BATCH_SIZE", "500"))
     poll = float(os.environ.get("POLL_SECONDS", "2"))
     retry = float(os.environ.get("RETRY_SECONDS", "5"))
-    db = open_db(os.environ.get("DB_PATH", "../events.db"))
+    db = open_db(os.environ.get("DB_PATH", "events.db"))
 
     def post(events: list[Event]) -> None:
         post_events(url, token, events, timeout=10)
@@ -98,11 +82,3 @@ def main() -> None:
         db.close()
         log.info("shut down")
 
-
-if __name__ == "__main__":
-    # SystemExit unwinds through the loop like KeyboardInterrupt does, so both paths close the db.
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    try:
-        main()
-    except KeyboardInterrupt:
-        pass

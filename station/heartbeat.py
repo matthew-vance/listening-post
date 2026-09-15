@@ -2,9 +2,7 @@ import json
 import logging
 import os
 import shutil
-import signal
 import sqlite3
-import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -87,27 +85,20 @@ def post_heartbeat(url: str, token: str, report: dict[str, Any], timeout: float)
 
 
 def sample_buffer(db_path: str) -> BufferStats:
-    # Read-only: heartbeat must never create the table or take a write lock.
+    # Read-only: heartbeat must never create the table or take a write lock. The file or table may not exist yet
+    # on a fresh station; that's an empty buffer, not a failure.
     try:
-        db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as db:
+            return read_buffer(db)
     except sqlite3.OperationalError as e:
         log.warning("buffer unreadable (%s); reporting empty", e)
         return BufferStats(depth=0, oldest_ts=None, seq=0)
-    with db:
-        return read_buffer(db)
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
     url = os.environ.get("GATEWAY_URL", "http://localhost").rstrip("/")
-    token = os.environ.get("STATION_TOKEN")
-    if not token:
-        log.error("STATION_TOKEN is not set; mint one with `just station-add`")
-        sys.exit(1)
-    db_path = os.environ.get("DB_PATH", "../events.db")
+    token = os.environ["STATION_TOKEN"]  # checked once by the supervisor
+    db_path = os.environ.get("DB_PATH", "events.db")
     interval = float(os.environ.get("INTERVAL_SECONDS", "60"))
 
     log.info("reporting to %s every %ss", url, interval)
@@ -123,10 +114,3 @@ def main() -> None:
             log.warning("heartbeat failed: %s", e)
         time.sleep(interval)
 
-
-if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    try:
-        main()
-    except KeyboardInterrupt:
-        pass

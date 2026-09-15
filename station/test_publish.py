@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
-from publish import Event, open_db, post_events, publish_once
+from station.publish import Event, open_db, post_events, publish_once
 
 
 def count(db: sqlite3.Connection) -> int:

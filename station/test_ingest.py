@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from ingest import connect, ingest, open_db
+from station.ingest import connect, ingest, open_db
 
 FIXED = datetime(2026, 9, 13, 10, 0, 0, tzinfo=UTC)
 BIG = 1000
@@ -35,6 +35,18 @@ class OpenDbTest(unittest.TestCase):
             second = open_db(path)  # reopening must not fail or drop rows
             self.assertEqual(count(second), 1)
             second.close()
+
+    def test_waits_for_a_concurrent_writer_before_switching_to_wal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / "events.db")
+            other = sqlite3.connect(path, check_same_thread=False)  # publish, mid-CREATE TABLE on a fresh buffer
+            other.execute("BEGIN IMMEDIATE")
+            other.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, raw TEXT)")
+            threading.Timer(0.3, other.commit).start()
+            db = open_db(path)
+            self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+            db.close()
+            other.close()
 
 
 class IngestTest(unittest.TestCase):

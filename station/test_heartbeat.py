@@ -1,11 +1,13 @@
 import json
 import sqlite3
+import tempfile
 import threading
 import unittest
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
-from heartbeat import BufferStats, State, build_report, post_heartbeat
+from station.heartbeat import BufferStats, State, build_report, post_heartbeat, sample_buffer
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -25,18 +27,26 @@ class ReadBufferTest(unittest.TestCase):
         self.addCleanup(self.db.close)
 
     def test_empty_table(self) -> None:
-        from heartbeat import read_buffer
+        from station.heartbeat import read_buffer
 
         self.assertEqual(read_buffer(self.db), BufferStats(depth=0, oldest_ts=None, seq=0))
 
     def test_seq_survives_deletes(self) -> None:
-        from heartbeat import read_buffer
+        from station.heartbeat import read_buffer
 
         self.db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", [("t1", "a"), ("t2", "b"), ("t3", "c")])
         self.db.execute("DELETE FROM events WHERE id = 1")
         self.db.commit()
 
         self.assertEqual(read_buffer(self.db), BufferStats(depth=2, oldest_ts="t2", seq=3))
+
+    def test_sample_reports_empty_when_file_or_table_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self.assertLogs("heartbeat", "WARNING") as logs:
+            path = str(Path(tmp) / "events.db")
+            self.assertEqual(sample_buffer(path).depth, 0)  # no file yet
+            sqlite3.connect(path).close()  # file created by another process, table not yet
+            self.assertEqual(sample_buffer(path).depth, 0)
+        self.assertEqual(len(logs.output), 2)
 
 
 class BuildReportTest(unittest.TestCase):
