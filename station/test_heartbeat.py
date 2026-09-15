@@ -1,21 +1,11 @@
-import json
 import sqlite3
 import tempfile
-import threading
 import unittest
 from datetime import UTC, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from station.heartbeat import BufferStats, State, build_report, post_heartbeat, sample_buffer
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-    id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts  TEXT    NOT NULL,
-    raw TEXT    NOT NULL
-)
-"""
+from station.heartbeat import BufferStats, State, build_report, read_buffer, sample_buffer
+from station.ingest import SCHEMA
 
 T0 = datetime(2026, 9, 14, 14, 0, 0, tzinfo=UTC)
 
@@ -27,13 +17,9 @@ class ReadBufferTest(unittest.TestCase):
         self.addCleanup(self.db.close)
 
     def test_empty_table(self) -> None:
-        from station.heartbeat import read_buffer
-
         self.assertEqual(read_buffer(self.db), BufferStats(depth=0, oldest_ts=None, seq=0))
 
     def test_seq_survives_deletes(self) -> None:
-        from station.heartbeat import read_buffer
-
         self.db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", [("t1", "a"), ("t2", "b"), ("t3", "c")])
         self.db.execute("DELETE FROM events WHERE id = 1")
         self.db.commit()
@@ -123,51 +109,6 @@ class BuildReportTest(unittest.TestCase):
 
         self.assertEqual(report["last_publish_ts"], now.isoformat())
         self.assertEqual(report["last_event_ts"], now.isoformat())
-
-
-class PostHeartbeatTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.requests: list[dict[str, object]] = []
-        test = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:
-                body = self.rfile.read(int(self.headers["Content-Length"]))
-                test.requests.append(
-                    {
-                        "path": self.path,
-                        "content_type": self.headers["Content-Type"],
-                        "authorization": self.headers["Authorization"],
-                        "body": json.loads(body),
-                    }
-                )
-                self.send_response(200)
-                self.end_headers()
-
-            def log_message(self, *_: object) -> None:
-                pass
-
-        self.server = HTTPServer(("localhost", 0), Handler)
-        threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.05), daemon=True).start()
-        self.addCleanup(self.server.shutdown)
-        self.url = f"http://localhost:{self.server.server_port}"
-
-    def test_posts_report(self) -> None:
-        report = {"reported_at": T0.isoformat(), "uptime_seconds": 1, "disk_free_bytes": 2, "buffer_depth": 3}
-
-        post_heartbeat(self.url, "secret-token", report, timeout=2)
-
-        self.assertEqual(
-            self.requests,
-            [
-                {
-                    "path": "/v1/stations/heartbeat",
-                    "content_type": "application/json",
-                    "authorization": "Bearer secret-token",
-                    "body": report,
-                }
-            ],
-        )
 
 
 if __name__ == "__main__":

@@ -82,6 +82,9 @@ def main() -> None:
     if not os.environ.get("STATION_TOKEN"):
         log.error("STATION_TOKEN is not set; mint one with `just station-add`")
         sys.exit(1)
+    # Create the file, schema, and WAL mode before any child opens the buffer. Switching a database to WAL
+    # requires an exclusive lock, which fails if publish is creating the table at the same moment.
+    ingest.open_db(os.environ.get("DB_PATH", "events.db")).close()
     try:
         supervise(TARGETS, float(os.environ.get("RESTART_SECONDS", "5")))
     except KeyboardInterrupt:

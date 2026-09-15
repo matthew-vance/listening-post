@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import sqlite3
@@ -6,9 +5,8 @@ import time
 from collections.abc import Callable
 from typing import TypedDict
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
-from station.ingest import SCHEMA
+from station.gateway import post_json
 
 log = logging.getLogger("publish")
 
@@ -21,9 +19,7 @@ class Event(TypedDict):
 
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
-    db.row_factory = sqlite3.Row
-    db.execute(SCHEMA)  # publish may start before ingest has created the table
-    db.commit()
+    db.row_factory = sqlite3.Row  # schema and WAL mode are set up once by the supervisor
     return db
 
 
@@ -36,14 +32,6 @@ def ack(db: sqlite3.Connection, upto_id: int) -> None:
     # publish is the only deleter and always drains from the head, so id <= is safe
     db.execute("DELETE FROM events WHERE id <= ?", (upto_id,))
     db.commit()
-
-
-def post_events(url: str, token: str, events: list[Event], timeout: float) -> None:
-    body = json.dumps({"events": events}).encode()
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-    req = Request(f"{url}/v1/events", data=body, headers=headers, method="POST")
-    with urlopen(req, timeout=timeout):  # raises HTTPError on non-2xx, URLError on connection failure
-        pass
 
 
 def publish_once(db: sqlite3.Connection, post: Callable[[list[Event]], None], batch_size: int) -> int:
@@ -65,7 +53,7 @@ def main() -> None:
     db = open_db(os.environ.get("DB_PATH", "events.db"))
 
     def post(events: list[Event]) -> None:
-        post_events(url, token, events, timeout=10)
+        post_json(url, token, "/v1/events", {"events": events}, timeout=10)
 
     log.info("publishing to %s", url)
     try:

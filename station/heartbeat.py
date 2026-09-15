@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import shutil
@@ -8,7 +7,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+from station.gateway import post_json
 
 log = logging.getLogger("heartbeat")
 
@@ -76,14 +76,6 @@ def build_report(
     return report, state
 
 
-def post_heartbeat(url: str, token: str, report: dict[str, Any], timeout: float) -> None:
-    body = json.dumps(report).encode()
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-    req = Request(f"{url}/v1/stations/heartbeat", data=body, headers=headers, method="POST")
-    with urlopen(req, timeout=timeout):  # raises HTTPError on non-2xx, URLError on connection failure
-        pass
-
-
 def sample_buffer(db_path: str) -> BufferStats:
     # Read-only: heartbeat must never create the table or take a write lock. The file or table may not exist yet
     # on a fresh station; that's an empty buffer, not a failure.
@@ -100,15 +92,16 @@ def main() -> None:
     token = os.environ["STATION_TOKEN"]  # checked once by the supervisor
     db_path = os.environ.get("DB_PATH", "events.db")
     interval = float(os.environ.get("INTERVAL_SECONDS", "60"))
+    disk_path = os.path.dirname(os.path.abspath(db_path))
 
     log.info("reporting to %s every %ss", url, interval)
     state: State | None = None
     while True:
         stats = sample_buffer(db_path)
-        disk_free = shutil.disk_usage(os.path.dirname(os.path.abspath(db_path))).free
+        disk_free = shutil.disk_usage(disk_path).free
         report, state = build_report(datetime.now(UTC), uptime_seconds(), disk_free, stats, state)
         try:
-            post_heartbeat(url, token, report, timeout=10)
+            post_json(url, token, "/v1/stations/heartbeat", report, timeout=10)
             log.info("sent heartbeat: depth=%d rate=%s", stats.depth, report.get("event_rate", "n/a"))
         except (HTTPError, URLError, TimeoutError) as e:
             log.warning("heartbeat failed: %s", e)

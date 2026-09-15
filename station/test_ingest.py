@@ -36,18 +36,6 @@ class OpenDbTest(unittest.TestCase):
             self.assertEqual(count(second), 1)
             second.close()
 
-    def test_waits_for_a_concurrent_writer_before_switching_to_wal(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = str(Path(tmp) / "events.db")
-            other = sqlite3.connect(path, check_same_thread=False)  # publish, mid-CREATE TABLE on a fresh buffer
-            other.execute("BEGIN IMMEDIATE")
-            other.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, raw TEXT)")
-            threading.Timer(0.3, other.commit).start()
-            db = open_db(path)
-            self.assertEqual(db.execute("PRAGMA journal_mode").fetchone()[0], "wal")
-            db.close()
-            other.close()
-
 
 class IngestTest(unittest.TestCase):
     def setUp(self) -> None:

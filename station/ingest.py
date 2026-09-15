@@ -19,16 +19,7 @@ log = logging.getLogger("ingest")
 
 def open_db(path: str) -> sqlite3.Connection:
     db = sqlite3.connect(path)
-    # Switching to WAL needs the file to itself. On a fresh buffer publish may be creating the table at the same
-    # moment (the supervisor starts both at once), and SQLite's busy timeout doesn't cover this case, so retry.
-    for attempt in range(50):
-        try:
-            db.execute("PRAGMA journal_mode=WAL")  # publish reads while we write
-            break
-        except sqlite3.OperationalError:
-            if attempt == 49:
-                raise
-            time.sleep(0.1)
+    db.execute("PRAGMA journal_mode=WAL")  # publish reads while we write
     db.execute("PRAGMA synchronous=NORMAL")  # fsync at checkpoint, not per commit; only power loss can lose rows
     db.execute(SCHEMA)
     db.commit()
