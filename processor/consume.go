@@ -11,11 +11,12 @@ import (
 )
 
 // batchLoop polls, hands each batch to handle, and produces what it returns before committing, so a crash
-// re-handles rather than drops. The poll is bounded so handlers with periodic work (expiry sweeps) still run
-// when nothing arrives. Commit uses a fresh context: ctx may have been cancelled mid-produce, and the batch is acked.
-func batchLoop(ctx context.Context, client *kgo.Client, pollEvery time.Duration, handle func(kgo.Fetches) []*kgo.Record) error {
+// re-handles rather than drops. Each poll is bounded by pollTimeout, evaluated per iteration, so handlers with
+// periodic work (expiry sweeps) still run on time when nothing arrives. Commit uses a fresh context: ctx may have
+// been cancelled mid-produce, and the batch is acked.
+func batchLoop(ctx context.Context, client *kgo.Client, pollTimeout func() time.Duration, handle func(kgo.Fetches) []*kgo.Record) error {
 	for {
-		pollCtx, cancel := context.WithTimeout(ctx, pollEvery)
+		pollCtx, cancel := context.WithTimeout(ctx, pollTimeout())
 		fetches := client.PollFetches(pollCtx)
 		cancel()
 		if ctx.Err() != nil {
@@ -46,7 +47,7 @@ func batchLoop(ctx context.Context, client *kgo.Client, pollEvery time.Duration,
 // decodeLoop decodes every raw record onto out. Lines that don't parse are logged and skipped: the raw archive
 // keeps them, and events.decoded is derived.
 func decodeLoop(ctx context.Context, client *kgo.Client, out string, logger *slog.Logger) error {
-	return batchLoop(ctx, client, time.Minute, func(fetches kgo.Fetches) []*kgo.Record {
+	return batchLoop(ctx, client, func() time.Duration { return time.Minute }, func(fetches kgo.Fetches) []*kgo.Record {
 		var recs []*kgo.Record
 		skipped := 0
 		fetches.EachRecord(func(in *kgo.Record) {

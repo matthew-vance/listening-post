@@ -105,7 +105,10 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 func (l *stateLoop) run(ctx context.Context) error {
 	const sweepEvery = 10 * time.Second
 	lastSweep := l.now()
-	return batchLoop(ctx, l.client, sweepEvery, func(fetches kgo.Fetches) []*kgo.Record {
+	// Anchor the poll deadline to the last sweep rather than the poll start, otherwise a trickle of traffic
+	// resets the timer each poll and sweeps slip to ~2x sweepEvery.
+	nextSweep := func() time.Duration { return sweepEvery - l.now().Sub(lastSweep) }
+	return batchLoop(ctx, l.client, nextSweep, func(fetches kgo.Fetches) []*kgo.Record {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		var out []*kgo.Record
