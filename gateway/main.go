@@ -65,8 +65,9 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	checks := map[string]func(context.Context) error{"database": pool.Ping, "kafka": kafka.Ping}
 
 	r := &readiness{}
-	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool}, pub)}
-	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r, checks)}
+	// ReadHeaderTimeout bounds how long a client can dribble headers before it costs us a goroutine.
+	public := &http.Server{Addr: ":" + cmp.Or(getenv("PORT"), "8080"), Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool}, pub), ReadHeaderTimeout: 10 * time.Second}
+	admin := &http.Server{Addr: ":" + cmp.Or(getenv("ADMIN_PORT"), "9091"), Handler: newAdminServer(r, checks), ReadHeaderTimeout: 10 * time.Second}
 
 	// Bind synchronously so a taken port fails run() outright and ready is only set once both listeners exist.
 	errc := make(chan error, 2)
@@ -90,7 +91,7 @@ func run(ctx context.Context, getenv func(string) string, stderr io.Writer) erro
 	case <-ctx.Done():
 	case serveErr = <-errc: // a dead listener must not leave us running and reporting ready
 	}
-	r.shuttingDown.Store(true)
+	r.ready.Store(false)
 	logger.Info("shutting down")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
