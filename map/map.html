@@ -22,10 +22,8 @@
   async function refresh() {
     const aircraft = await (await fetch("/state.json")).json();
     const now = Date.now(), seen = new Set();
-    let positioned = 0;
     for (const a of aircraft) {
       if (a.lat == null || a.lon == null) continue;
-      positioned++;
       seen.add(a.icao);
       const stale = now - Date.parse(a.position_ts) > 60_000;
       const icon = L.divIcon({
@@ -43,8 +41,8 @@
       }
     }
     for (const [icao, m] of markers) if (!seen.has(icao)) { m.remove(); markers.delete(icao); }
-    if (!centered && positioned > 0) { map.fitBounds([...markers.values()].map(m => m.getLatLng()), { maxZoom: 9 }); centered = true; }
-    document.getElementById("count").textContent = `${positioned} on map · ${aircraft.length} tracked`;
+    if (!centered && seen.size > 0) { map.fitBounds([...markers.values()].map(m => m.getLatLng()), { maxZoom: 9 }); centered = true; }
+    document.getElementById("count").textContent = `${seen.size} on map · ${aircraft.length} tracked`;
   }
   refresh();
   setInterval(refresh, 2000);
