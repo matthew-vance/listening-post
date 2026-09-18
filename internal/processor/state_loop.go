@@ -101,6 +101,11 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 	return nil
 }
 
+func (l *stateLoop) record(snap snapshot, partition int32) *kgo.Record {
+	value, _ := json.Marshal(snap)
+	return &kgo.Record{Topic: l.topic, Partition: partition, Key: []byte(snap.ICAO), Value: value}
+}
+
 // run folds decoded messages into state and publishes a snapshot per change plus tombstones for expired aircraft.
 func (l *stateLoop) run(ctx context.Context) error {
 	const sweepEvery = 10 * time.Second
@@ -122,8 +127,7 @@ func (l *stateLoop) run(ctx context.Context) error {
 				return // nothing to key state on
 			}
 			if snap, changed := l.state.apply(m, in.Partition); changed {
-				value, _ := json.Marshal(snap)
-				out = append(out, &kgo.Record{Topic: l.topic, Partition: in.Partition, Key: []byte(m.ICAO), Value: value})
+				out = append(out, l.record(snap, in.Partition))
 			}
 		})
 		if now := l.now(); now.Sub(lastSweep) >= sweepEvery {
@@ -131,6 +135,9 @@ func (l *stateLoop) run(ctx context.Context) error {
 			for _, a := range l.state.expire(now) {
 				out = append(out, &kgo.Record{Topic: l.topic, Partition: a.partition, Key: []byte(a.snap.ICAO), Value: nil})
 				l.logger.Info("expired", "icao", a.snap.ICAO)
+			}
+			for _, a := range l.state.unpublished() {
+				out = append(out, l.record(a.snap, a.partition))
 			}
 		}
 		if len(out) > 0 {

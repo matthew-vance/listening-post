@@ -15,7 +15,6 @@ type snapshot struct {
 	PositionTS time.Time `json:"position_ts,omitempty"`
 	Stations   []string  `json:"stations"`
 	Messages   int64     `json:"messages"`
-	Updated    []string  `json:"updated"` // fields that changed in this snapshot
 	payload
 }
 
@@ -24,18 +23,20 @@ type aircraft struct {
 	fieldTS   map[string]time.Time // event ts at which each field was last set
 	floor     time.Time            // restored from a snapshot: every field is at least this new, exact times weren't persisted
 	partition int32                // events.decoded partition its messages arrive on; its snapshots go to the same number on aircraft.state
+	dirty     bool                 // heard from since its last snapshot went out
 }
 
 func newAircraft(icao string) *aircraft {
 	return &aircraft{snap: snapshot{ICAO: icao}, fieldTS: map[string]time.Time{}}
 }
 
-// apply merges one decoded message and records the names of fields whose value changed in snap.Updated.
+// apply merges one decoded message and reports whether any field's value changed.
 // A field updates only if the message is at least as new as the one that last set it: a station's
 // stale backlog can't regress live state, but a slightly reordered message from another station
 // still lands the fields the newer one lacked.
-func (a *aircraft) apply(m decodedRecord) {
+func (a *aircraft) apply(m decodedRecord) bool {
 	s := &a.snap
+	a.dirty = true
 	if s.FirstSeen.IsZero() || m.TS.Before(s.FirstSeen) {
 		s.FirstSeen = m.TS
 	}
@@ -47,7 +48,7 @@ func (a *aircraft) apply(m decodedRecord) {
 		s.Stations = slices.Insert(s.Stations, i, m.StationID)
 	}
 
-	var changed []string
+	changed := false
 	set := func(name string, present bool, differs bool, assign func()) {
 		if !present || m.TS.Before(a.fieldTS[name]) || m.TS.Before(a.floor) {
 			return
@@ -55,7 +56,7 @@ func (a *aircraft) apply(m decodedRecord) {
 		a.fieldTS[name] = m.TS
 		if differs {
 			assign()
-			changed = append(changed, name)
+			changed = true
 		}
 	}
 	set("callsign", m.Callsign != "", m.Callsign != s.Callsign, func() { s.Callsign = m.Callsign })
@@ -72,8 +73,7 @@ func (a *aircraft) apply(m decodedRecord) {
 	set("on_ground", m.OnGround != nil, !eq(s.OnGround, m.OnGround), func() { s.OnGround = m.OnGround })
 	hasPosition := m.Lat != nil && m.Lon != nil
 	set("position_ts", hasPosition, !m.TS.Equal(s.PositionTS), func() { s.PositionTS = m.TS })
-
-	s.Updated = changed
+	return changed
 }
 
 func eq[T comparable](a, b *T) bool {
@@ -98,8 +98,11 @@ func (s *state) apply(m decodedRecord, partition int32) (snapshot, bool) {
 		s.aircraft[m.ICAO] = a
 	}
 	a.partition = partition
-	a.apply(m)
-	return a.snap, len(a.snap.Updated) > 0
+	changed := a.apply(m)
+	if changed {
+		a.dirty = false // this snapshot is going out now
+	}
+	return a.snap, changed
 }
 
 // restore seeds an aircraft from a persisted snapshot, replacing whatever was tracked for it.
@@ -120,6 +123,20 @@ func (s *state) expire(now time.Time) []*aircraft {
 	}
 	slices.SortFunc(gone, func(a, b *aircraft) int { return cmp.Compare(a.snap.ICAO, b.snap.ICAO) })
 	return gone
+}
+
+// unpublished returns aircraft heard since their last snapshot went out but with nothing changed, sorted by ICAO,
+// and marks them published: the sweep re-emits them so last_seen and messages on the topic don't go stale.
+func (s *state) unpublished() []*aircraft {
+	var out []*aircraft
+	for _, a := range s.aircraft {
+		if a.dirty {
+			a.dirty = false
+			out = append(out, a)
+		}
+	}
+	slices.SortFunc(out, func(a, b *aircraft) int { return cmp.Compare(a.snap.ICAO, b.snap.ICAO) })
+	return out
 }
 
 // drop forgets every aircraft on the given partitions: another instance owns them now.

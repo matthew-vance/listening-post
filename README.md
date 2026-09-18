@@ -165,10 +165,10 @@ A second loop in the same service folds `events.decoded` into per-aircraft state
 ```json
 {"icao":"A22123","callsign":"AAL433","altitude":8275,"ground_speed":117,"track":240,"lat":40.14684,"lon":-83.17065,
  "vertical_rate":0,"squawk":"6653","alert":false,"emergency":false,"spi":false,"on_ground":false,
- "first_seen":"…","last_seen":"…","position_ts":"…","stations":["3ae884ac-…"],"messages":412,"updated":["lat","lon","position_ts"]}
+ "first_seen":"…","last_seen":"…","position_ts":"…","stations":["3ae884ac-…"],"messages":412}
 ```
 
-Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. `updated` names what changed in that snapshot. Each instance holds state only for the `events.decoded` partitions it owns, rebuilding it from the compacted topic when a partition is assigned and forgetting it when one is revoked, so restarts and rebalances are invisible downstream.
+Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. An aircraft still heard from but unchanged is republished on the next expiry sweep (≤10 s) so `last_seen` and `messages` stay current. Each instance holds state only for the `events.decoded` partitions it owns, rebuilding it from the compacted topic when a partition is assigned and forgetting it when one is revoked, so restarts and rebalances are invisible downstream.
 
 It consumes `events.decoded` rather than deriving state inside the decode loop because decoded partitions are keyed by ICAO: multiple processor instances split *aircraft* between them, not stations. A snapshot is written to the same partition number of `aircraft.state` its messages arrived on, so `aircraft.state` needs at least as many partitions as `events.decoded`.
 

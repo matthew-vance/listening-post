@@ -69,9 +69,6 @@ func TestRunDecodesTopic(t *testing.T) {
 	if byICAO["A4BF41"]["callsign"] != "AAL433" || byICAO["A22123"]["altitude"] != float64(8275) || byICAO["A51958"]["ground_speed"] != float64(505) {
 		t.Fatalf("snapshots = %v", byICAO)
 	}
-	if u, _ := byICAO["A22123"]["updated"].([]any); len(u) == 0 {
-		t.Fatal("first snapshot must list updated fields")
-	}
 
 	// expiry: with EXPIRE_SECONDS=1 the sweep tombstones every aircraft
 	var tombstones int
