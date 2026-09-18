@@ -103,15 +103,20 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
-          --topic events.raw --partitions 3 --replication-factor 1
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
-          --topic events.decoded --partitions 3 --replication-factor 1
+        topic() {
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --partitions 3 --replication-factor 1 --topic "$$@"
+        }
         # compacted: latest snapshot per aircraft. Small segments so compaction actually runs at this volume.
+        compact="--config cleanup.policy=compact --config segment.ms=600000 --config min.cleanable.dirty.ratio=0.1"
+        topic events.raw
+        topic events.decoded
         # Needs at least as many partitions as events.decoded: the processor writes snapshots partition-for-partition.
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
-          --topic aircraft.state --partitions 3 --replication-factor 1 \
-          --config cleanup.policy=compact --config segment.ms=600000 --config min.cleanable.dirty.ratio=0.1
+        topic aircraft.state $$compact
+        # Flink twins of the two above: the Flink job reads the same events.raw and writes here, so its output
+        # can be compared with the Go processor's. Names must match the constants in flink/.../ProcessorJob.java.
+        topic events.decoded.flink
+        topic aircraft.state.flink $$compact
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
@@ -125,6 +130,48 @@ services:
       kafka:
         condition: service_healthy
 
+  # The Go processor re-implemented as a Flink job (flink/), running side by side for comparison. Application
+  # mode: the jobmanager runs the one job baked into the image; the taskmanager does the work. Checkpoints go to
+  # a shared volume so a taskmanager failure recovers state. There's no HA (needs ZooKeeper or Kubernetes), so a
+  # jobmanager restart starts the job from empty state; see README.
+  flink-jobmanager:
+    build: flink
+    restart: unless-stopped
+    command: standalone-job --job-classname listeningpost.ProcessorJob
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      # managed memory is only used by the RocksDB backend; zero it so the heap backend gets that share
+      FLINK_PROPERTIES: &flink-properties |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        jobmanager.memory.process.size: 1024m
+        taskmanager.memory.process.size: 1024m
+        taskmanager.memory.managed.size: 0m
+        execution.checkpointing.interval: 10s
+        execution.checkpointing.dir: file:///opt/flink/checkpoints
+        restart-strategy.type: fixed-delay
+        restart-strategy.fixed-delay.attempts: 10
+        restart-strategy.fixed-delay.delay: 5s
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+    ports:
+      - "127.0.0.1:8083:8081" # Flink web UI, host-side only
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  flink-taskmanager:
+    build: flink
+    restart: unless-stopped
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: *flink-properties
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+    depends_on:
+      - flink-jobmanager
+
 volumes:
   postgres:
   kafka:
+  flink-checkpoints:

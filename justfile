@@ -11,10 +11,11 @@ up:
 archive-ls:
     find archive -name '*.parquet' | sort | tail -n 20
 
-# Serve a live map of aircraft.state on localhost:8082 (dev only; reads Kafka through the compose container)
+# Serve a live map of a state topic on localhost:8082 (dev only; reads Kafka through the compose container).
+# `just map aircraft.state.flink` shows the Flink processor's output instead.
 [working-directory: 'map']
-map:
-    python3 map.py
+map topic='aircraft.state':
+    TOPIC={{quote(topic)}} python3 map.py
 
 # List Kafka topics
 kafka-topics:
@@ -66,7 +67,7 @@ station-list:
     scripts/stations.sh list
 
 # Run all tests; add new projects as dependencies here
-test: test-server test-station test-map
+test: test-server test-station test-map test-flink
 
 # Needs Docker: starts throwaway Postgres and Kafka containers. `go test -short ./...` skips those.
 test-server:
@@ -78,3 +79,7 @@ test-station:
 [working-directory: 'map']
 test-map:
     python3 -m unittest
+
+# Needs Docker: the image's build stage runs the JUnit tests (no JDK on the host)
+test-flink:
+    docker build -q --target build flink

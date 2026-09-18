@@ -179,7 +179,17 @@ It consumes `events.decoded` rather than deriving state inside the decode loop b
 
 #### Map
 
-`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` inside the compose container, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old.
+`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` inside the compose container, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old. `just map aircraft.state.flink` shows the Flink processor's output instead.
+
+### Flink processor
+
+`flink/` is the processor re-implemented as an [Apache Flink](https://flink.apache.org) DataStream job, for learning. It runs alongside the Go one: same `events.raw` in, its own `events.decoded.flink` and `aircraft.state.flink` out, so the two can be compared on identical input. Same parse, same merge rules, same expiry and republish behaviour (its tests are ports of the Go ones).
+
+The shape differs where Flink changes the problem. Decode is a stateless `flatMap`; state is a `KeyedProcessFunction` keyed by ICAO with one `ValueState<Aircraft>` per aircraft and a processing-time timer per aircraft that fires every 10 s to expire or republish it. Flink checkpoints that state, so the Go side's warm-up-from-compacted-topic and partition alignment don't exist here: Kafka partitions of `aircraft.state.flink` are just the default key hash.
+
+It runs in application mode: `flink-jobmanager` runs the one job baked into the image, `flink-taskmanager` does the work, and checkpoints go to a shared volume so a taskmanager failure recovers state. The Flink UI is at http://localhost:8083. There is no HA (Flink needs ZooKeeper or Kubernetes for that), so **restarting the jobmanager starts the job from empty state**: aircraft that went silent before the restart keep their last snapshot on `aircraft.state.flink` until they're heard again, and `first_seen`/`messages` restart. `KAFKA_BROKERS` and `EXPIRE_SECONDS` mean the same as for the Go processor.
+
+There's no JDK on the host: `just test-flink` builds the image, and the build stage runs the JUnit tests.
 
 ### Kafka
 

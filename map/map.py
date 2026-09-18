@@ -5,6 +5,7 @@ Reads via kafka-console-consumer in a throwaway kafka container so nothing needs
 
 import json
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -17,12 +18,13 @@ log = logging.getLogger("map")
 
 SEP = "\t"
 PORT = 8082
+TOPIC = os.environ.get("TOPIC", "aircraft.state")  # aircraft.state.flink shows the Flink processor's output
 # `docker run` (unlike `compose exec`) forwards signals into the container, so terminate() cleanly stops the consumer.
 CONSUMER = [
     "docker", "run", "--rm", "--init", "--network", "listening-post_default", "apache/kafka:4.3.1",
     "/opt/kafka/bin/kafka-console-consumer.sh",
     "--bootstrap-server", "kafka:9092",
-    "--topic", "aircraft.state",
+    "--topic", TOPIC,
     "--from-beginning",
     "--formatter-property", "print.key=true",
     "--formatter-property", f"key.separator={SEP}",
