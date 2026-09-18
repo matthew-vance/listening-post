@@ -55,21 +55,24 @@ func insertToken(t *testing.T, pool *pgxpool.Pool, id, token string) {
 	}
 }
 
-// lookupFunc adapts a func to stationLookup, for the one case real Postgres can't produce on demand: a failing lookup.
+// The handler tables run on these func adapters, so every status code is reachable without Docker. The
+// Postgres and Kafka adapters have their own tests (TestStationStoreLookup, TestHeartbeatStoreSave,
+// TestKafkaPublisherPublish) and are wired end to end by TestRun.
+
+const testStation = "3ae884ac-cac2-442d-93ec-5885d868f15c"
+
 type lookupFunc func(ctx context.Context, token string) (string, bool, error)
 
 func (f lookupFunc) Lookup(ctx context.Context, token string) (string, bool, error) {
 	return f(ctx, token)
 }
 
-// saverFunc adapts a func to heartbeatSaver, for the one case real Postgres can't produce on demand: a failing save.
 type saverFunc func(ctx context.Context, station string, receivedAt time.Time, hb heartbeatRequest) error
 
 func (f saverFunc) Save(ctx context.Context, station string, receivedAt time.Time, hb heartbeatRequest) error {
 	return f(ctx, station, receivedAt, hb)
 }
 
-// publisherFunc adapts a func to eventPublisher, for the one case a real broker can't produce on demand: a failing publish.
 type publisherFunc func(ctx context.Context, station string, receivedAt time.Time, events []event) error
 
 func (f publisherFunc) Publish(ctx context.Context, station string, receivedAt time.Time, events []event) error {
@@ -77,6 +80,13 @@ func (f publisherFunc) Publish(ctx context.Context, station string, receivedAt t
 }
 
 var (
+	// fixedStations resolves testToken to testStation and nothing else.
+	fixedStations = lookupFunc(func(_ context.Context, token string) (string, bool, error) {
+		if token == testToken {
+			return testStation, true, nil
+		}
+		return "", false, nil
+	})
 	noopSaver     = saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return nil })
 	noopPublisher = publisherFunc(func(context.Context, string, time.Time, []event) error { return nil })
 	pingOK        = func(context.Context) error { return nil }
@@ -127,7 +137,6 @@ func TestBearerAuth(t *testing.T) {
 	echo := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(stationFrom(r.Context())))
 	})
-	stations, id, _ := testStations(t)
 	failing := lookupFunc(func(context.Context, string) (string, bool, error) { return "", false, errors.New("boom") })
 
 	tests := []struct {
@@ -136,10 +145,10 @@ func TestBearerAuth(t *testing.T) {
 		wantCode     int
 		wantBody     string
 	}{
-		{"no header", "", stations, http.StatusUnauthorized, ""},
-		{"wrong scheme", "Basic dGVzdA==", stations, http.StatusUnauthorized, ""},
-		{"unknown token", "Bearer nope", stations, http.StatusUnauthorized, ""},
-		{"valid", "Bearer " + testToken, stations, http.StatusOK, id},
+		{"no header", "", fixedStations, http.StatusUnauthorized, ""},
+		{"wrong scheme", "Basic dGVzdA==", fixedStations, http.StatusUnauthorized, ""},
+		{"unknown token", "Bearer nope", fixedStations, http.StatusUnauthorized, ""},
+		{"valid", "Bearer " + testToken, fixedStations, http.StatusOK, testStation},
 		{"store error", "Bearer " + testToken, failing, http.StatusInternalServerError, ""},
 	}
 	for _, tt := range tests {
@@ -214,14 +223,6 @@ func TestReadyz(t *testing.T) {
 }
 
 func TestEventsPost(t *testing.T) {
-	stations, id, _ := testStations(t)
-	topic := kafkatest.Topic(t)
-	client, err := openKafka(t.Context(), kafkatest.Brokers)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	pub := &kafkaPublisher{client: client, topic: topic}
 	tests := []struct {
 		name        string
 		token       string
@@ -237,7 +238,16 @@ func TestEventsPost(t *testing.T) {
 		{"empty raw", testToken, `{"events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":""}]}`, http.StatusUnprocessableEntity, "events[0].raw"},
 		{"body too large", testToken, `{"events":[{"id":1,"ts":"2026-09-13T23:51:42Z","raw":"` + strings.Repeat("x", 1<<20) + `"}]}`, http.StatusRequestEntityTooLarge, ""},
 	}
-	srv := newServer(slog.New(slog.DiscardHandler), stations, noopSaver, pub)
+	var (
+		published []event
+		station   string
+		received  time.Time
+	)
+	capture := publisherFunc(func(_ context.Context, s string, at time.Time, events []event) error {
+		station, received, published = s, at, append(published, events...)
+		return nil
+	})
+	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := post(srv, "/v1/events", tt.token, tt.body)
@@ -246,15 +256,14 @@ func TestEventsPost(t *testing.T) {
 		})
 	}
 
-	// the one 200 above produced exactly one record, keyed by the station
-	rec := kafkatest.Consume(t, topic, 1)[0]
-	if string(rec.Key) != id || !strings.Contains(string(rec.Value), `"raw":"MSG,3,1,1,ABC123,1"`) {
-		t.Fatalf("record key=%q value=%s", rec.Key, rec.Value)
+	// the one 200 above published exactly its events, attributed to the authenticated station
+	if station != testStation || received.IsZero() || len(published) != 1 || published[0].Raw != "MSG,3,1,1,ABC123,1" {
+		t.Fatalf("published station=%q received=%v events=%+v", station, received, published)
 	}
 
 	t.Run("publish failure", func(t *testing.T) {
 		failing := publisherFunc(func(context.Context, string, time.Time, []event) error { return errors.New("boom") })
-		srv := newServer(slog.New(slog.DiscardHandler), stations, noopSaver, failing)
+		srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, failing)
 		wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusInternalServerError)
 	})
 }
@@ -278,9 +287,15 @@ func TestHeartbeatPost(t *testing.T) {
 		{"negative buffer_depth", testToken, `{"reported_at":"2026-09-14T14:00:00Z","uptime_seconds":1,"disk_free_bytes":1,"buffer_depth":-1}`, http.StatusUnprocessableEntity, "buffer_depth"},
 		{"negative event_rate", testToken, `{` + required + `,"event_rate":-1}`, http.StatusUnprocessableEntity, "event_rate"},
 	}
-	stations, id, _ := testStations(t)
-	pool := stations.pool
-	srv := newServer(slog.New(slog.DiscardHandler), stations, &heartbeatStore{pool: pool}, noopPublisher)
+	var saved []heartbeatRequest
+	capture := saverFunc(func(_ context.Context, station string, at time.Time, hb heartbeatRequest) error {
+		if station != testStation || at.IsZero() {
+			t.Errorf("save station=%q received=%v", station, at)
+		}
+		saved = append(saved, hb)
+		return nil
+	})
+	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, capture, noopPublisher)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := post(srv, "/v1/stations/heartbeat", tt.token, tt.body)
@@ -289,17 +304,14 @@ func TestHeartbeatPost(t *testing.T) {
 		})
 	}
 
-	var stored int
-	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM heartbeats WHERE station_id = $1", id).Scan(&stored); err != nil {
-		t.Fatal(err)
-	}
-	if stored != 1 { // three 200s share one reported_at, so one row
-		t.Fatalf("stored heartbeats = %d, want 1", stored)
+	// the three 200s each reached the store; the optional fields arrive only when sent
+	if len(saved) != 3 || saved[0].EventRate != nil || saved[1].EventRate == nil || *saved[1].EventRate != 6.4 || saved[2].OldestBufferedTS != nil {
+		t.Fatalf("saved = %+v", saved)
 	}
 
 	t.Run("store failure", func(t *testing.T) {
 		failing := saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return errors.New("boom") })
-		srv := newServer(slog.New(slog.DiscardHandler), stations, failing, noopPublisher)
+		srv := newServer(slog.New(slog.DiscardHandler), fixedStations, failing, noopPublisher)
 		wantStatus(t, post(srv, "/v1/stations/heartbeat", testToken, `{`+required+`}`), http.StatusInternalServerError)
 	})
 }
@@ -329,6 +341,10 @@ func TestRun(t *testing.T) {
 	public := "http://localhost:" + publicPort
 	if got := statusOf(t, http.MethodPost, public+"/v1/events", validEvents, testToken); got != http.StatusOK {
 		t.Fatalf("POST /v1/events on public port: status = %d, want %d", got, http.StatusOK)
+	}
+	heartbeat := `{"reported_at":"2026-09-14T14:00:00Z","uptime_seconds":100,"disk_free_bytes":1000,"buffer_depth":0}`
+	if got := statusOf(t, http.MethodPost, public+"/v1/stations/heartbeat", heartbeat, testToken); got != http.StatusOK {
+		t.Fatalf("POST /v1/stations/heartbeat on public port: status = %d, want %d", got, http.StatusOK)
 	}
 	if got := statusOf(t, http.MethodGet, public+"/healthz", "", ""); got != http.StatusNotFound {
 		t.Fatalf("GET /healthz on public port: status = %d, want %d", got, http.StatusNotFound)

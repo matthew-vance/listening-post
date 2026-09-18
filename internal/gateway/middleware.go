@@ -10,7 +10,6 @@ import (
 
 type stationKey struct{}
 
-// stationLookup is the port bearerAuth authenticates through; stationStore is the Postgres adapter.
 type stationLookup interface {
 	Lookup(ctx context.Context, token string) (station string, ok bool, err error)
 }

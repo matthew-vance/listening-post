@@ -33,7 +33,6 @@ func (r eventsRequest) Valid() map[string]string {
 	return problems
 }
 
-// eventPublisher is the port handleEventsPost writes through; kafkaPublisher is the adapter.
 type eventPublisher interface {
 	Publish(ctx context.Context, station string, receivedAt time.Time, events []event) error
 }
@@ -89,7 +88,6 @@ func (r heartbeatRequest) Valid() map[string]string {
 	return problems
 }
 
-// heartbeatSaver is the port handleHeartbeatPost writes through; heartbeatStore is the Postgres adapter.
 type heartbeatSaver interface {
 	Save(ctx context.Context, station string, receivedAt time.Time, hb heartbeatRequest) error
 }
