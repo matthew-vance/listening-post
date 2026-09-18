@@ -71,17 +71,73 @@ func eq[T comparable](a, b *T) bool {
 	return a != nil && b != nil && *a == *b
 }
 
-// state is every aircraft currently tracked.
+// sweepEvery is how often fold expires silent aircraft and republishes ones heard but unchanged.
+const sweepEvery = 10 * time.Second
+
+// state is every aircraft currently tracked, plus the sweep clock.
 type state struct {
-	aircraft map[string]*aircraft
-	expiry   time.Duration
+	aircraft  map[string]*aircraft
+	expiry    time.Duration
+	lastSweep time.Time // zero until the first fold, which anchors it without sweeping
 }
 
 func newState(expiry time.Duration) *state {
 	return &state{aircraft: map[string]*aircraft{}, expiry: expiry}
 }
 
-// apply routes a message to its aircraft, creating it on first sight, and returns the snapshot if it changed.
+// decodedIn is one message off events.decoded with the partition it arrived on.
+type decodedIn struct {
+	wire.Decoded
+	partition int32
+}
+
+// stateOut is one record for aircraft.state: a snapshot, or a tombstone when snap is nil.
+type stateOut struct {
+	icao      string
+	partition int32
+	snap      *wire.Snapshot
+}
+
+// fold applies a batch as of now and returns what to publish, in order: a snapshot per aircraft whose fields
+// changed, then, once sweepEvery has passed since the last sweep, tombstones for aircraft silent longer than
+// the expiry and snapshots for aircraft heard since their last snapshot but unchanged (so last_seen and
+// messages on the topic don't go stale). now is the wall clock, compared against event time.
+func (s *state) fold(batch []decodedIn, now time.Time) []stateOut {
+	var out []stateOut
+	for _, m := range batch {
+		if snap, changed := s.apply(m.Decoded, m.partition); changed {
+			out = append(out, stateOut{icao: snap.ICAO, partition: m.partition, snap: &snap})
+		}
+	}
+	if s.lastSweep.IsZero() {
+		s.lastSweep = now
+		return out
+	}
+	if now.Sub(s.lastSweep) < sweepEvery {
+		return out
+	}
+	s.lastSweep = now
+	for _, a := range s.expire(now) {
+		out = append(out, stateOut{icao: a.snap.ICAO, partition: a.partition})
+	}
+	for _, a := range s.unpublished() {
+		snap := a.snap
+		out = append(out, stateOut{icao: snap.ICAO, partition: a.partition, snap: &snap})
+	}
+	return out
+}
+
+// untilSweep is how long a poll may block before the next sweep is due, anchored to the last sweep rather than
+// the poll start so a trickle of traffic can't push sweeps out to ~2x sweepEvery.
+func (s *state) untilSweep(now time.Time) time.Duration {
+	if s.lastSweep.IsZero() {
+		return sweepEvery
+	}
+	return sweepEvery - now.Sub(s.lastSweep)
+}
+
+// apply routes a message to its aircraft, creating it on first sight, and returns the snapshot if it changed;
+// a changed snapshot is published by fold, so the aircraft is no longer owed one.
 func (s *state) apply(m wire.Decoded, partition int32) (wire.Snapshot, bool) {
 	a, ok := s.aircraft[m.ICAO]
 	if !ok {
@@ -91,9 +147,18 @@ func (s *state) apply(m wire.Decoded, partition int32) (wire.Snapshot, bool) {
 	a.partition = partition
 	changed := a.apply(m)
 	if changed {
-		a.dirty = false // this snapshot is going out now
+		a.dirty = false
 	}
 	return a.snap, changed
+}
+
+// forget drops one aircraft: a tombstone seen while warming up.
+func (s *state) forget(icao string) {
+	delete(s.aircraft, icao)
+}
+
+func (s *state) size() int {
+	return len(s.aircraft)
 }
 
 // restore seeds an aircraft from a persisted snapshot, replacing whatever was tracked for it.
@@ -117,7 +182,7 @@ func (s *state) expire(now time.Time) []*aircraft {
 }
 
 // unpublished returns aircraft heard since their last snapshot went out but with nothing changed, sorted by ICAO,
-// and marks them published: the sweep re-emits them so last_seen and messages on the topic don't go stale.
+// and marks them published.
 func (s *state) unpublished() []*aircraft {
 	var out []*aircraft
 	for _, a := range s.aircraft {

@@ -86,7 +86,7 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 			}
 			icao := string(r.Key)
 			if r.Value == nil { // tombstone
-				delete(l.state.aircraft, icao)
+				l.state.forget(icao)
 				return
 			}
 			var snap wire.Snapshot
@@ -98,26 +98,17 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 			loaded++
 		})
 	}
-	l.logger.Info("warmed state", "partitions", partitions, "aircraft", len(l.state.aircraft), "records", loaded)
+	l.logger.Info("warmed state", "partitions", partitions, "aircraft", l.state.size(), "records", loaded)
 	return nil
 }
 
-func (l *stateLoop) record(snap wire.Snapshot, partition int32) *kgo.Record {
-	value, _ := json.Marshal(snap)
-	return &kgo.Record{Topic: l.topic, Partition: partition, Key: []byte(snap.ICAO), Value: value}
-}
-
-// run folds decoded messages into state and publishes a snapshot per change plus tombstones for expired aircraft.
+// run folds decoded messages into state and publishes what fold returns: snapshots on change, and on each sweep
+// tombstones for expired aircraft and republished snapshots for ones heard but unchanged.
 func (l *stateLoop) run(ctx context.Context) error {
-	const sweepEvery = 10 * time.Second
-	lastSweep := l.now()
-	// Anchor the poll deadline to the last sweep rather than the poll start, otherwise a trickle of traffic
-	// resets the timer each poll and sweeps slip to ~2x sweepEvery.
-	nextSweep := func() time.Duration { return sweepEvery - l.now().Sub(lastSweep) }
-	return batchLoop(ctx, l.client, nextSweep, func(fetches kgo.Fetches) []*kgo.Record {
+	return batchLoop(ctx, l.client, func() time.Duration { return l.state.untilSweep(l.now()) }, func(fetches kgo.Fetches) []*kgo.Record {
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		var out []*kgo.Record
+		var batch []decodedIn
 		fetches.EachRecord(func(in *kgo.Record) {
 			var m wire.Decoded
 			if err := json.Unmarshal(in.Value, &m); err != nil {
@@ -127,22 +118,20 @@ func (l *stateLoop) run(ctx context.Context) error {
 			if m.ICAO == "" {
 				return // nothing to key state on
 			}
-			if snap, changed := l.state.apply(m, in.Partition); changed {
-				out = append(out, l.record(snap, in.Partition))
-			}
+			batch = append(batch, decodedIn{Decoded: m, partition: in.Partition})
 		})
-		if now := l.now(); now.Sub(lastSweep) >= sweepEvery {
-			lastSweep = now
-			for _, a := range l.state.expire(now) {
-				out = append(out, &kgo.Record{Topic: l.topic, Partition: a.partition, Key: []byte(a.snap.ICAO), Value: nil})
-				l.logger.Info("expired", "icao", a.snap.ICAO)
+		var out []*kgo.Record
+		for _, o := range l.state.fold(batch, l.now()) {
+			var value []byte
+			if o.snap == nil {
+				l.logger.Info("expired", "icao", o.icao)
+			} else {
+				value, _ = json.Marshal(o.snap)
 			}
-			for _, a := range l.state.unpublished() {
-				out = append(out, l.record(a.snap, a.partition))
-			}
+			out = append(out, &kgo.Record{Topic: l.topic, Partition: o.partition, Key: []byte(o.icao), Value: value})
 		}
 		if len(out) > 0 {
-			l.logger.Info("state", "snapshots", len(out), "tracked", len(l.state.aircraft))
+			l.logger.Info("state", "snapshots", len(out), "tracked", l.state.size())
 		}
 		return out
 	})
