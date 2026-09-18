@@ -1,23 +1,15 @@
 import logging
 import os
 import shutil
-import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from station import gateway
-from station.ingest import DB_PATH
+from station import buffer, gateway
+from station.buffer import DB_PATH, BufferStats
 
 log = logging.getLogger("heartbeat")
-
-
-@dataclass(frozen=True)
-class BufferStats:
-    depth: int
-    oldest_ts: str | None
-    seq: int  # last id ingest assigned; survives deletes, so it measures arrivals
 
 
 @dataclass(frozen=True)
@@ -27,18 +19,6 @@ class State:
     depth: int
     last_event_at: datetime | None
     last_publish_at: datetime | None
-
-
-def read_buffer(db: sqlite3.Connection) -> BufferStats:
-    # One statement = one snapshot, so depth and seq can't straddle an ingest commit.
-    depth, oldest_ts, seq = db.execute(
-        """
-        SELECT (SELECT count(*) FROM events),
-               (SELECT ts FROM events ORDER BY id LIMIT 1),
-               (SELECT seq FROM sqlite_sequence WHERE name = 'events')
-        """
-    ).fetchone()
-    return BufferStats(depth=depth, oldest_ts=oldest_ts, seq=seq or 0)
 
 
 def uptime_seconds() -> int:
@@ -77,10 +57,10 @@ def build_report(
 
 
 def sample_buffer(db_path: str) -> BufferStats:
-    # Read-only: heartbeat must never create the table or take a write lock. The supervisor creates the file and
-    # schema before starting us, so an unreadable buffer is a real fault: let it raise and be restarted.
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as db:
-        return read_buffer(db)
+    # A fresh read-only connection per tick: heartbeat never takes a write lock, and a buffer the supervisor
+    # recreated is picked up. An unreadable buffer is a real fault: let it raise and be restarted.
+    with buffer.open(db_path, readonly=True) as db:
+        return buffer.sample(db)
 
 
 def main() -> None:

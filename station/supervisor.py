@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from multiprocessing.connection import wait
 
-from station import heartbeat, ingest, publish
+from station import buffer, heartbeat, ingest, publish
 
 log = logging.getLogger("station")
 
@@ -82,9 +82,7 @@ def main() -> None:
     if not os.environ.get("STATION_TOKEN"):
         log.error("STATION_TOKEN is not set; mint one with `just station-add`")
         sys.exit(1)
-    # Create the file, schema, and WAL mode before any child opens the buffer. Switching a database to WAL
-    # requires an exclusive lock, which fails if publish is creating the table at the same moment.
-    ingest.open_db(ingest.DB_PATH).close()
+    buffer.create(buffer.DB_PATH)  # before any child opens it; the children never create
     try:
         supervise(TARGETS, float(os.environ.get("RESTART_SECONDS", "5")))
     except KeyboardInterrupt:

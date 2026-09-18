@@ -4,8 +4,9 @@ import unittest
 from pathlib import Path
 from urllib.error import URLError
 
-from station import ingest
-from station.publish import Event, open_db, publish_once
+from station import buffer
+from station.buffer import Event
+from station.publish import publish_once
 
 
 def count(db: sqlite3.Connection) -> int:
@@ -17,8 +18,8 @@ class PublishOnceTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         path = str(Path(tmp.name) / "events.db")
-        ingest.open_db(path).close()  # the supervisor does this before starting publish
-        self.db = open_db(path)
+        buffer.create(path)  # the supervisor does this before starting publish
+        self.db = buffer.open(path)
         self.addCleanup(self.db.close)
         self.posted: list[list[Event]] = []
 
@@ -26,8 +27,7 @@ class PublishOnceTest(unittest.TestCase):
         self.posted.append(events)
 
     def seed(self, *raws: str) -> None:
-        self.db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", [("t", r) for r in raws])
-        self.db.commit()
+        buffer.append(self.db, [("t", r) for r in raws])
 
     def test_empty_buffer_posts_nothing(self) -> None:
         self.assertEqual(publish_once(self.db, self.capture, batch_size=10), 0)

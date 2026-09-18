@@ -8,7 +8,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from station.ingest import connect, ingest, open_db
+from station import buffer
+from station.ingest import connect, ingest
 
 FIXED = datetime(2026, 9, 13, 10, 0, 0, tzinfo=UTC)
 BIG = 1000
@@ -23,26 +24,13 @@ def count(db: sqlite3.Connection) -> int:
     return db.execute("SELECT count(*) FROM events").fetchone()[0]
 
 
-class OpenDbTest(unittest.TestCase):
-    def test_creates_table_idempotently(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = str(Path(tmp) / "events.db")
-            first = open_db(path)
-            first.execute("INSERT INTO events (ts, raw) VALUES (?, ?)", ("t", "r"))
-            first.commit()
-            first.close()
-
-            second = open_db(path)  # reopening must not fail or drop rows
-            self.assertEqual(count(second), 1)
-            second.close()
-
-
 class IngestTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         path = str(Path(self.tmp.name) / "events.db")
-        self.db = open_db(path)
+        buffer.create(path)
+        self.db = buffer.open(path)
         self.reader = sqlite3.connect(path)  # separate connection: sees only committed rows
         self.addCleanup(self.db.close)
         self.addCleanup(self.reader.close)

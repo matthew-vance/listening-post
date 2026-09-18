@@ -6,26 +6,9 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS events (
-    id  INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts  TEXT    NOT NULL,
-    raw TEXT    NOT NULL
-)
-"""
+from station import buffer
 
 log = logging.getLogger("ingest")
-
-DB_PATH = os.environ.get("DB_PATH", "events.db")  # the buffer every station loop shares
-
-
-def open_db(path: str) -> sqlite3.Connection:
-    db = sqlite3.connect(path)
-    db.execute("PRAGMA journal_mode=WAL")  # publish reads while we write
-    db.execute("PRAGMA synchronous=NORMAL")  # fsync at checkpoint, not per commit; only power loss can lose rows
-    db.execute(SCHEMA)
-    db.commit()
-    return db
 
 
 def ingest(
@@ -37,16 +20,14 @@ def ingest(
     flush_after: timedelta,
 ) -> int:
     """Write every batch_size lines or flush_after since the last write, whichever is first."""
-    # Rows are buffered in memory and written in one short transaction so the write lock is
-    # held for milliseconds per batch; an open transaction between commits would starve publish.
+    # Rows are buffered in memory and written in one batch; an open transaction between commits would starve publish.
     written = 0
     pending: list[tuple[str, str]] = []
     last_flush = now()
 
     def flush() -> None:
         nonlocal written, last_flush
-        db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", pending)
-        db.commit()
+        buffer.append(db, pending)
         written += len(pending)
         log.info("committed %d events (%d total this connection)", len(pending), written)
         pending.clear()
@@ -92,7 +73,7 @@ def main() -> None:
     port = int(os.environ.get("DUMP1090_PORT", "30003"))
     batch_size = int(os.environ.get("INGEST_BATCH_SIZE", "100"))
     flush_after = timedelta(seconds=float(os.environ.get("FLUSH_SECONDS", "5")))
-    db = open_db(DB_PATH)
+    db = buffer.open(buffer.DB_PATH)
 
     try:
         while True:

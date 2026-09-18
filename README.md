@@ -40,7 +40,7 @@ dump1090 and the `station` package run on the Pi:
   - **publish** — reads batches from that table, POSTs them to the gateway, and deletes rows only after a 2xx. Retries while the gateway is unreachable.
   - **heartbeat** — every `INTERVAL_SECONDS`, reads the buffer (read-only) and the OS and POSTs a status report: uptime, free disk, buffer depth, event rate, last event/publish times. Independent of ingest and publish so it keeps reporting when they don't.
 
-The SQLite file is the buffer between the two: it survives Pi reboots and gateway outages, so the pipeline never loses data as long as the Pi has disk. Requirements on the Pi are just Python ≥ 3.11 and dump1090 — no packages to install. Deploying is `scp -r station/ pi:~/` and one systemd unit:
+The SQLite file is the buffer between the two: it survives Pi reboots and gateway outages, so the pipeline never loses data as long as the Pi has disk. `station/buffer.py` is the only module that knows its schema — the supervisor creates it, ingest appends, publish drains from the head, heartbeat samples it read-only — so the loops hold no SQL. Requirements on the Pi are just Python ≥ 3.11 and dump1090 — no packages to install. Deploying is `scp -r station/ pi:~/` and one systemd unit:
 
 ```ini
 [Service]

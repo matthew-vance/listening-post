@@ -1,28 +1,10 @@
-import sqlite3
 import unittest
 from datetime import UTC, datetime, timedelta
 
-from station.heartbeat import BufferStats, State, build_report, read_buffer
-from station.ingest import SCHEMA
+from station.buffer import BufferStats
+from station.heartbeat import State, build_report
 
 T0 = datetime(2026, 9, 14, 14, 0, 0, tzinfo=UTC)
-
-
-class ReadBufferTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.db = sqlite3.connect(":memory:")
-        self.db.execute(SCHEMA)
-        self.addCleanup(self.db.close)
-
-    def test_empty_table(self) -> None:
-        self.assertEqual(read_buffer(self.db), BufferStats(depth=0, oldest_ts=None, seq=0))
-
-    def test_seq_survives_deletes(self) -> None:
-        self.db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", [("t1", "a"), ("t2", "b"), ("t3", "c")])
-        self.db.execute("DELETE FROM events WHERE id = 1")
-        self.db.commit()
-
-        self.assertEqual(read_buffer(self.db), BufferStats(depth=2, oldest_ts="t2", seq=3))
 
 
 class BuildReportTest(unittest.TestCase):

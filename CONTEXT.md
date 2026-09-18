@@ -7,6 +7,10 @@ An ADS-B receiving pipeline: stations on Raspberry Pis forward what dump1090 hea
 **Station**:
 One receiver installation, identified by a UUID and authenticated by bearer token. Everything it hears is attributed to it.
 
+**Buffer**:
+The SQLite file on a station that holds Events from the moment dump1090 emits them until the gateway has acknowledged them. It is what lets a station survive reboots and gateway outages without losing data.
+_Avoid_: db, store, queue, events table
+
 **Event**:
 One raw SBS-1 line as a station heard it, wrapped with the station id, the station's sequence number, and timestamps. The unit of everything upstream of decoding.
 _Avoid_: message, line, record
