@@ -1,0 +1,324 @@
+[
+  {
+    "name": "1 identification",
+    "value": {
+      "station_id": "st",
+      "id": 1,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,1,1,1,A4BF41,1,2026/09/14,16:05:25.403,2026/09/14,16:05:25.428,AAL433  ,,,,,,,,,,,0",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A4BF41",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 1,
+      "transmission_type": 1,
+      "icao": "A4BF41",
+      "generated": "2026/09/14 16:05:25.403",
+      "logged": "2026/09/14 16:05:25.428",
+      "callsign": "AAL433",
+      "on_ground": false
+    }
+  },
+  {
+    "name": "2 surface position",
+    "value": {
+      "station_id": "st",
+      "id": 2,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,2,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,0,12.5,270.1,40.14684,-83.17065,,,,,,-1",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A22123",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 2,
+      "transmission_type": 2,
+      "icao": "A22123",
+      "generated": "2026/09/14 16:05:24.167",
+      "logged": "2026/09/14 16:05:24.173",
+      "altitude": 0,
+      "ground_speed": 12.5,
+      "track": 270.1,
+      "lat": 40.14684,
+      "lon": -83.17065,
+      "on_ground": true
+    }
+  },
+  {
+    "name": "3 airborne position",
+    "value": {
+      "station_id": "st",
+      "id": 3,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A22123",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 3,
+      "transmission_type": 3,
+      "icao": "A22123",
+      "generated": "2026/09/14 16:05:24.167",
+      "logged": "2026/09/14 16:05:24.173",
+      "altitude": 8275,
+      "lat": 40.14684,
+      "lon": -83.17065,
+      "alert": false,
+      "spi": false,
+      "on_ground": false
+    }
+  },
+  {
+    "name": "4 airborne velocity",
+    "value": {
+      "station_id": "st",
+      "id": 4,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,4,1,1,A51958,1,2026/09/14,15:35:33.455,2026/09/14,15:35:33.505,,,505,89,,,-64,,,,,0",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A51958",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 4,
+      "transmission_type": 4,
+      "icao": "A51958",
+      "generated": "2026/09/14 15:35:33.455",
+      "logged": "2026/09/14 15:35:33.505",
+      "ground_speed": 505,
+      "track": 89,
+      "vertical_rate": -64,
+      "on_ground": false
+    }
+  },
+  {
+    "name": "5 surveillance altitude",
+    "value": {
+      "station_id": "st",
+      "id": 5,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,5,1,1,A22123,1,2026/09/14,16:05:23.686,2026/09/14,16:05:23.737,,8275,,,,,,,0,,0,",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A22123",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 5,
+      "transmission_type": 5,
+      "icao": "A22123",
+      "generated": "2026/09/14 16:05:23.686",
+      "logged": "2026/09/14 16:05:23.737",
+      "altitude": 8275,
+      "alert": false,
+      "spi": false
+    }
+  },
+  {
+    "name": "6 surveillance id",
+    "value": {
+      "station_id": "st",
+      "id": 6,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,6,1,1,A86392,1,2026/09/14,16:06:05.266,2026/09/14,16:06:05.292,,,,,,,,6653,0,0,0,",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A86392",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 6,
+      "transmission_type": 6,
+      "icao": "A86392",
+      "generated": "2026/09/14 16:06:05.266",
+      "logged": "2026/09/14 16:06:05.292",
+      "squawk": "6653",
+      "alert": false,
+      "emergency": false,
+      "spi": false
+    }
+  },
+  {
+    "name": "7 air to air",
+    "value": {
+      "station_id": "st",
+      "id": 7,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,7,1,1,A22123,1,2026/09/14,16:05:23.745,2026/09/14,16:05:23.791,,8275,,,,,,,,,,",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A22123",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 7,
+      "transmission_type": 7,
+      "icao": "A22123",
+      "generated": "2026/09/14 16:05:23.745",
+      "logged": "2026/09/14 16:05:23.791",
+      "altitude": 8275
+    }
+  },
+  {
+    "name": "8 all call reply",
+    "value": {
+      "station_id": "st",
+      "id": 8,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,8,1,1,AB197E,1,2026/09/14,16:05:23.670,2026/09/14,16:05:23.684,,,,,,,,,,,,0",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "AB197E",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 8,
+      "transmission_type": 8,
+      "icao": "AB197E",
+      "generated": "2026/09/14 16:05:23.670",
+      "logged": "2026/09/14 16:05:23.684",
+      "on_ground": false
+    }
+  },
+  {
+    "name": "squawk keeps leading zeros",
+    "value": {
+      "station_id": "st",
+      "id": 9,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,6,1,1,A86392,1,2026/09/14,16:06:05.266,2026/09/14,16:06:05.292,,,,,,,,0400,-1,-1,-1,",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "A86392",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 9,
+      "transmission_type": 6,
+      "icao": "A86392",
+      "generated": "2026/09/14 16:06:05.266",
+      "logged": "2026/09/14 16:06:05.292",
+      "squawk": "0400",
+      "alert": true,
+      "emergency": true,
+      "spi": true
+    }
+  },
+  {
+    "name": "no icao keys by station",
+    "value": {
+      "station_id": "st",
+      "id": 10,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,8,1,1,,1,2026/09/14,16:05:23.670,2026/09/14,16:05:23.684,,,,,,,,,,,,0",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "key": "st",
+    "want": {
+      "station_id": "st",
+      "ts": "2026-09-14T15:00:17Z",
+      "received_at": "2026-09-14T15:00:20Z",
+      "message_type": "MSG",
+      "id": 10,
+      "transmission_type": 8,
+      "generated": "2026/09/14 16:05:23.670",
+      "logged": "2026/09/14 16:05:23.684",
+      "on_ground": false
+    }
+  },
+  {
+    "name": "too few fields",
+    "value": {
+      "station_id": "st",
+      "id": 99,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,3,1,1,A22123",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "want": null
+  },
+  {
+    "name": "empty line",
+    "value": {
+      "station_id": "st",
+      "id": 99,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "want": null
+  },
+  {
+    "name": "not sbs",
+    "value": {
+      "station_id": "st",
+      "id": 99,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "hello from compose",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "want": null
+  },
+  {
+    "name": "bad altitude",
+    "value": {
+      "station_id": "st",
+      "id": 99,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,high,,,40.14684,-83.17065,,,0,,0,0",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "want": null
+  },
+  {
+    "name": "bad transmission type",
+    "value": {
+      "station_id": "st",
+      "id": 99,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,x,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,,,,,,,,,,,",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "want": null
+  },
+  {
+    "name": "bad flag",
+    "value": {
+      "station_id": "st",
+      "id": 99,
+      "ts": "2026-09-14T15:00:17Z",
+      "raw": "MSG,8,1,1,AB197E,1,2026/09/14,16:05:23.670,2026/09/14,16:05:23.684,,,,,,,,,,,,yes",
+      "received_at": "2026-09-14T15:00:20Z"
+    },
+    "want": null
+  },
+  {
+    "name": "garbage envelope",
+    "value": "hello from compose",
+    "want": null
+  }
+]

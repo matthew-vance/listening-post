@@ -5,21 +5,24 @@ import org.apache.flink.api.java.typeutils.PojoTypeInfo;
 import org.apache.flink.api.java.typeutils.TypeExtractor;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Port of internal/processor/state_test.go, plus the timer-driven sweep the Go loop does by polling. */
+/** The sweep and expiry the Go loop does by polling, driven here through timers; merge rules come from the goldens. */
 class StateFunctionTest {
     static final Instant BASE = Instant.parse("2026-09-14T15:00:00Z");
     static final long EXPIRE_MS = 300_000;
-    static final String IDENT = "MSG,1,1,1,A22123,1,2026/09/14,16:05:25.403,2026/09/14,16:05:25.428,AAL433  ,,,,,,,,,,,0";
     static final String POSITION = "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0";
     static final String VELOCITY = "MSG,4,1,1,A22123,1,2026/09/14,16:05:23.647,2026/09/14,16:05:23.684,,,117,240,,,0,,,,,0";
 
@@ -29,10 +32,15 @@ class StateFunctionTest {
         return Decode.decode(new Event(station, 0, ts, raw, ts));
     }
 
+    static KeyedOneInputStreamOperatorTestHarness<String, Decoded, StateOut> newHarness() throws Exception {
+        var h = ProcessFunctionTestHarnesses.forKeyedProcessFunction(new StateFunction(EXPIRE_MS), (Decoded d) -> d.icao, Types.STRING);
+        h.setProcessingTime(BASE.toEpochMilli());
+        return h;
+    }
+
     @BeforeEach
     void setUp() throws Exception {
-        harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(new StateFunction(EXPIRE_MS), d -> d.icao, Types.STRING);
-        harness.setProcessingTime(BASE.toEpochMilli());
+        harness = newHarness();
     }
 
     @AfterEach
@@ -62,25 +70,7 @@ class StateFunctionTest {
     }
 
     @Test
-    void mergesMessageTypes() throws Exception {
-        send(msg("s1", BASE, POSITION));
-        send(msg("s1", BASE.plusSeconds(1), VELOCITY));
-        send(msg("s1", BASE.plusSeconds(2), IDENT));
-        List<StateOut> out = out();
-        assertEquals(3, out.size(), "every message changed something");
-        Snapshot s = out.get(2).snapshot();
-        assertEquals(8275, s.altitude);
-        assertEquals(117, s.groundSpeed);
-        assertEquals(40.14684, s.lat);
-        assertEquals("AAL433", s.callsign);
-        assertEquals(3, s.messages);
-        assertEquals(BASE, s.firstSeen);
-        assertEquals(BASE.plusSeconds(2), s.lastSeen);
-        assertEquals(BASE, s.positionTs);
-    }
-
-    @Test
-    void repeatWithoutChangeIsQuietUntilSweep() throws Exception {
+    void sweepRepublishesHeardButUnchanged() throws Exception {
         send(msg("s1", BASE, VELOCITY));
         send(msg("s1", BASE.plusSeconds(1), VELOCITY));
         assertEquals(1, out().size(), "identical values must not emit");
@@ -93,30 +83,32 @@ class StateFunctionTest {
 
         advance(Duration.ofMillis(StateFunction.SWEEP_MS));
         assertEquals(0, out().size(), "nothing new: nothing republished");
-
-        // a repeated position is not quiet: position_ts is the staleness signal, so re-confirming it counts
-        send(msg("s1", BASE.plusSeconds(2), POSITION));
-        send(msg("s1", BASE.plusSeconds(3), POSITION));
-        List<StateOut> positions = out();
-        assertEquals(2, positions.size());
-        assertEquals(BASE.plusSeconds(3), positions.get(1).snapshot().positionTs);
     }
 
-    @Test
-    void olderMessageCannotRegressButCanFill() throws Exception {
-        send(msg("s1", BASE.plusSeconds(3600), POSITION)); // live position at 8275
-        String stale = "MSG,3,1,1,A22123,1,2026/09/14,14:00:00.000,2026/09/14,14:00:00.000,,2000,,,41.0,-84.0,,,0,,0,0";
-        send(msg("s2", BASE, stale));
-        List<StateOut> out = out();
-        assertEquals(1, out.size(), "stale backlog must not emit");
-        assertEquals(8275, out.get(0).snapshot().altitude);
-
-        // but an older message still fills fields nothing newer has set
-        send(msg("s2", BASE, VELOCITY));
-        out = out();
-        assertEquals(1, out.size());
-        assertEquals(117, out.get(0).snapshot().groundSpeed);
-        assertArrayEquals(new String[]{"s1", "s2"}, out.get(0).snapshot().stations);
+    /** The merge rules are pinned by internal/wire/testdata/merge.json, the same scenarios the Go processor runs. */
+    @TestFactory
+    List<DynamicTest> mergeGolden() throws Exception {
+        List<DynamicTest> tests = new ArrayList<>();
+        for (JsonNode sc : Golden.load("merge.json")) {
+            tests.add(DynamicTest.dynamicTest(sc.get("name").asText(), () -> {
+                // @BeforeEach runs once per factory, not per dynamic test: each scenario needs its own aircraft state
+                harness.close();
+                harness = newHarness();
+                int i = 0;
+                for (JsonNode st : sc.get("steps")) {
+                    send(msg(st.get("station").asText(), Instant.parse(st.get("ts").asText()), st.get("raw").asText()));
+                    List<StateOut> out = out();
+                    if (st.get("emit").isNull()) {
+                        assertEquals(0, out.size(), "step " + i + " must emit nothing");
+                    } else {
+                        assertEquals(1, out.size(), "step " + i + " must emit once");
+                        assertEquals(Golden.normalize(st.get("emit")), Golden.json(out.get(0).snapshot()), "step " + i);
+                    }
+                    i++;
+                }
+            }));
+        }
+        return tests;
     }
 
     @Test

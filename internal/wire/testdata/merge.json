@@ -1,0 +1,211 @@
+[
+  {
+    "name": "merges message types",
+    "steps": [
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:00Z",
+        "raw": "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T15:00:00Z",
+          "position_ts": "2026-09-14T15:00:00Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 1,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false,
+          "on_ground": false
+        }
+      },
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:01Z",
+        "raw": "MSG,4,1,1,A22123,1,2026/09/14,16:05:23.647,2026/09/14,16:05:23.684,,,117,240,,,0,,,,,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T15:00:01Z",
+          "position_ts": "2026-09-14T15:00:00Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 2,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false,
+          "on_ground": false,
+          "ground_speed": 117,
+          "track": 240,
+          "vertical_rate": 0
+        }
+      },
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:02Z",
+        "raw": "MSG,1,1,1,A22123,1,2026/09/14,16:05:25.403,2026/09/14,16:05:25.428,AAL433  ,,,,,,,,,,,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T15:00:02Z",
+          "position_ts": "2026-09-14T15:00:00Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 3,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false,
+          "on_ground": false,
+          "ground_speed": 117,
+          "track": 240,
+          "vertical_rate": 0,
+          "callsign": "AAL433"
+        }
+      }
+    ]
+  },
+  {
+    "name": "repeat without change is quiet; a repeated position re-confirms position_ts",
+    "steps": [
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:00Z",
+        "raw": "MSG,4,1,1,A22123,1,2026/09/14,16:05:23.647,2026/09/14,16:05:23.684,,,117,240,,,0,,,,,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T15:00:00Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 1,
+          "ground_speed": 117,
+          "track": 240,
+          "vertical_rate": 0,
+          "on_ground": false
+        }
+      },
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:01Z",
+        "raw": "MSG,4,1,1,A22123,1,2026/09/14,16:05:23.647,2026/09/14,16:05:23.684,,,117,240,,,0,,,,,0",
+        "emit": null
+      },
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:02Z",
+        "raw": "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T15:00:02Z",
+          "position_ts": "2026-09-14T15:00:02Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 3,
+          "ground_speed": 117,
+          "track": 240,
+          "vertical_rate": 0,
+          "on_ground": false,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false
+        }
+      },
+      {
+        "station": "s1",
+        "ts": "2026-09-14T15:00:03Z",
+        "raw": "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T15:00:03Z",
+          "position_ts": "2026-09-14T15:00:03Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 4,
+          "ground_speed": 117,
+          "track": 240,
+          "vertical_rate": 0,
+          "on_ground": false,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false
+        }
+      }
+    ]
+  },
+  {
+    "name": "an older message cannot regress a field but still fills unset ones",
+    "steps": [
+      {
+        "station": "s1",
+        "ts": "2026-09-14T16:00:00Z",
+        "raw": "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T16:00:00Z",
+          "last_seen": "2026-09-14T16:00:00Z",
+          "position_ts": "2026-09-14T16:00:00Z",
+          "stations": [
+            "s1"
+          ],
+          "messages": 1,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false,
+          "on_ground": false
+        }
+      },
+      {
+        "station": "s2",
+        "ts": "2026-09-14T15:00:00Z",
+        "raw": "MSG,3,1,1,A22123,1,2026/09/14,14:00:00.000,2026/09/14,14:00:00.000,,2000,,,41.0,-84.0,,,0,,0,0",
+        "emit": null
+      },
+      {
+        "station": "s2",
+        "ts": "2026-09-14T15:00:00Z",
+        "raw": "MSG,4,1,1,A22123,1,2026/09/14,16:05:23.647,2026/09/14,16:05:23.684,,,117,240,,,0,,,,,0",
+        "emit": {
+          "icao": "A22123",
+          "first_seen": "2026-09-14T15:00:00Z",
+          "last_seen": "2026-09-14T16:00:00Z",
+          "position_ts": "2026-09-14T16:00:00Z",
+          "stations": [
+            "s1",
+            "s2"
+          ],
+          "messages": 3,
+          "altitude": 8275,
+          "lat": 40.14684,
+          "lon": -83.17065,
+          "alert": false,
+          "spi": false,
+          "on_ground": false,
+          "ground_speed": 117,
+          "track": 240,
+          "vertical_rate": 0
+        }
+      }
+    ]
+  }
+]

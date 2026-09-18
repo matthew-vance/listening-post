@@ -5,21 +5,12 @@ import (
 	"maps"
 	"slices"
 	"time"
+
+	"github.com/matthew-vance/listening-post/internal/wire"
 )
 
-// snapshot is the wire format on aircraft.state: the full current picture of one aircraft, never a delta.
-type snapshot struct {
-	ICAO       string    `json:"icao"`
-	FirstSeen  time.Time `json:"first_seen"`
-	LastSeen   time.Time `json:"last_seen"`
-	PositionTS time.Time `json:"position_ts,omitempty"`
-	Stations   []string  `json:"stations"`
-	Messages   int64     `json:"messages"`
-	payload
-}
-
 type aircraft struct {
-	snap      snapshot
+	snap      wire.Snapshot
 	fieldTS   map[string]time.Time // event ts at which each field was last set
 	floor     time.Time            // restored from a snapshot: every field is at least this new, exact times weren't persisted
 	partition int32                // events.decoded partition its messages arrive on; its snapshots go to the same number on aircraft.state
@@ -27,14 +18,14 @@ type aircraft struct {
 }
 
 func newAircraft(icao string) *aircraft {
-	return &aircraft{snap: snapshot{ICAO: icao}, fieldTS: map[string]time.Time{}}
+	return &aircraft{snap: wire.Snapshot{ICAO: icao}, fieldTS: map[string]time.Time{}}
 }
 
 // apply merges one decoded message and reports whether any field's value changed.
 // A field updates only if the message is at least as new as the one that last set it: a station's
 // stale backlog can't regress live state, but a slightly reordered message from another station
 // still lands the fields the newer one lacked.
-func (a *aircraft) apply(m decodedRecord) bool {
+func (a *aircraft) apply(m wire.Decoded) bool {
 	s := &a.snap
 	a.dirty = true
 	if s.FirstSeen.IsZero() || m.TS.Before(s.FirstSeen) {
@@ -91,7 +82,7 @@ func newState(expiry time.Duration) *state {
 }
 
 // apply routes a message to its aircraft, creating it on first sight, and returns the snapshot if it changed.
-func (s *state) apply(m decodedRecord, partition int32) (snapshot, bool) {
+func (s *state) apply(m wire.Decoded, partition int32) (wire.Snapshot, bool) {
 	a, ok := s.aircraft[m.ICAO]
 	if !ok {
 		a = newAircraft(m.ICAO)
@@ -106,7 +97,7 @@ func (s *state) apply(m decodedRecord, partition int32) (snapshot, bool) {
 }
 
 // restore seeds an aircraft from a persisted snapshot, replacing whatever was tracked for it.
-func (s *state) restore(snap snapshot, partition int32) {
+func (s *state) restore(snap wire.Snapshot, partition int32) {
 	a := newAircraft(snap.ICAO)
 	a.snap, a.floor, a.partition = snap, snap.LastSeen, partition
 	s.aircraft[snap.ICAO] = a

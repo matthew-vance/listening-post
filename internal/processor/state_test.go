@@ -1,92 +1,29 @@
 package processor
 
 import (
-	"reflect"
 	"testing"
 	"time"
+
+	"github.com/matthew-vance/listening-post/internal/wire"
 )
 
 var base = time.Date(2026, 9, 14, 15, 0, 0, 0, time.UTC)
 
-func msg(station string, ts time.Time, raw string) decodedRecord {
+// msg builds a Decoded the way decodeRecord does, for driving state directly. Merge rules themselves are
+// pinned by the golden fixtures (golden_test.go); the tests here cover the sweep and partition lifecycle.
+func msg(station string, ts time.Time, raw string) wire.Decoded {
 	m, err := parseSBS(raw)
 	if err != nil {
 		panic(err)
 	}
-	return decodedRecord{StationID: station, TS: ts, ReceivedAt: ts, sbsMessage: m}
+	m.StationID, m.TS, m.ReceivedAt = station, ts, ts
+	return m
 }
 
 const (
-	ident    = "MSG,1,1,1,A22123,1,2026/09/14,16:05:25.403,2026/09/14,16:05:25.428,AAL433  ,,,,,,,,,,,0"
 	position = "MSG,3,1,1,A22123,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,8275,,,40.14684,-83.17065,,,0,,0,0"
 	velocity = "MSG,4,1,1,A22123,1,2026/09/14,16:05:23.647,2026/09/14,16:05:23.684,,,117,240,,,0,,,,,0"
 )
-
-func TestApplyMergesMessageTypes(t *testing.T) {
-	a := newAircraft("A22123")
-
-	if !a.apply(msg("s1", base, position)) {
-		t.Fatal("first apply must report a change")
-	}
-	if *a.snap.Altitude != 8275 || *a.snap.Lat != 40.14684 || !a.snap.PositionTS.Equal(base) {
-		t.Fatalf("position not merged: %+v", a.snap)
-	}
-	if !a.snap.FirstSeen.Equal(base) || !a.snap.LastSeen.Equal(base) || a.snap.Messages != 1 {
-		t.Fatalf("bookkeeping: %+v", a.snap)
-	}
-
-	if !a.apply(msg("s1", base.Add(time.Second), velocity)) {
-		t.Fatal("velocity must report a change")
-	}
-	if *a.snap.Altitude != 8275 || *a.snap.GroundSpeed != 117 || *a.snap.Lat != 40.14684 {
-		t.Fatalf("merged snapshot lost a field: %+v", a.snap)
-	}
-
-	if !a.apply(msg("s1", base.Add(2*time.Second), ident)) {
-		t.Fatal("ident must report a change")
-	}
-	if a.snap.Callsign != "AAL433" || a.snap.Messages != 3 || !a.snap.LastSeen.Equal(base.Add(2*time.Second)) {
-		t.Fatalf("after ident: %+v", a.snap)
-	}
-}
-
-func TestApplyRepeatWithoutChangeIsQuiet(t *testing.T) {
-	a := newAircraft("A22123")
-	a.apply(msg("s1", base, velocity))
-	if a.apply(msg("s1", base.Add(time.Second), velocity)) {
-		t.Fatal("identical values must not report a change")
-	}
-	if a.snap.Messages != 2 || !a.snap.LastSeen.Equal(base.Add(time.Second)) {
-		t.Fatalf("repeat must still count and bump last_seen: %+v", a.snap)
-	}
-
-	// a repeated position is not quiet: position_ts is the staleness signal, so re-confirming it counts
-	a.apply(msg("s1", base.Add(2*time.Second), position))
-	if !a.apply(msg("s1", base.Add(3*time.Second), position)) || !a.snap.PositionTS.Equal(base.Add(3*time.Second)) {
-		t.Fatalf("repeated position must re-confirm position_ts: %+v", a.snap)
-	}
-}
-
-func TestApplyOlderMessageCannotRegressButCanFill(t *testing.T) {
-	a := newAircraft("A22123")
-	a.apply(msg("s1", base.Add(time.Hour), position)) // live position at 8275
-
-	stale := "MSG,3,1,1,A22123,1,2026/09/14,14:00:00.000,2026/09/14,14:00:00.000,,2000,,,41.0,-84.0,,,0,,0,0"
-	if a.apply(msg("s2", base, stale)) {
-		t.Fatal("stale backlog must not report a change")
-	}
-	if *a.snap.Altitude != 8275 {
-		t.Fatalf("altitude regressed to %d", *a.snap.Altitude)
-	}
-
-	// but an older message still fills fields nothing newer has set
-	if !a.apply(msg("s2", base, velocity)) || *a.snap.GroundSpeed != 117 {
-		t.Fatalf("older velocity must fill unset fields: %+v", a.snap)
-	}
-	if !reflect.DeepEqual(a.snap.Stations, []string{"s1", "s2"}) {
-		t.Fatalf("stations = %v", a.snap.Stations)
-	}
-}
 
 func TestUnpublishedReturnsHeardButUnchanged(t *testing.T) {
 	s := newState(5 * time.Minute)

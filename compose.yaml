@@ -135,7 +135,9 @@ services:
   # a shared volume so a taskmanager failure recovers state. There's no HA (needs ZooKeeper or Kubernetes), so a
   # jobmanager restart starts the job from empty state; see README.
   flink-jobmanager:
-    build: flink
+    build: &flink-build
+      context: . # the repo root: the tests read internal/wire/testdata
+      dockerfile: flink/Dockerfile
     restart: unless-stopped
     command: standalone-job --job-classname listeningpost.ProcessorJob
     environment:
@@ -161,7 +163,7 @@ services:
         condition: service_completed_successfully
 
   flink-taskmanager:
-    build: flink
+    build: *flink-build
     restart: unless-stopped
     command: taskmanager
     environment:

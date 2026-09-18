@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matthew-vance/listening-post/internal/wire"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -88,7 +89,7 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 				delete(l.state.aircraft, icao)
 				return
 			}
-			var snap snapshot
+			var snap wire.Snapshot
 			if err := json.Unmarshal(r.Value, &snap); err != nil {
 				l.logger.Warn("warm-up: bad snapshot", "key", icao, "err", err)
 				return
@@ -101,7 +102,7 @@ func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 	return nil
 }
 
-func (l *stateLoop) record(snap snapshot, partition int32) *kgo.Record {
+func (l *stateLoop) record(snap wire.Snapshot, partition int32) *kgo.Record {
 	value, _ := json.Marshal(snap)
 	return &kgo.Record{Topic: l.topic, Partition: partition, Key: []byte(snap.ICAO), Value: value}
 }
@@ -118,7 +119,7 @@ func (l *stateLoop) run(ctx context.Context) error {
 		defer l.mu.Unlock()
 		var out []*kgo.Record
 		fetches.EachRecord(func(in *kgo.Record) {
-			var m decodedRecord
+			var m wire.Decoded
 			if err := json.Unmarshal(in.Value, &m); err != nil {
 				l.logger.Warn("skipping decoded record", "partition", in.Partition, "offset", in.Offset, "err", err)
 				return

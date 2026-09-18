@@ -4,3 +4,4 @@ archive
 __pycache__
 .idea
 *_test.go
+flink/target

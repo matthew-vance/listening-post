@@ -82,4 +82,4 @@ test-map:
 
 # Needs Docker: the image's build stage runs the JUnit tests (no JDK on the host)
 test-flink:
-    docker build -q --target build flink
+    docker build -q --target build -f flink/Dockerfile .
