@@ -51,7 +51,12 @@ public final class ProcessorJob {
         env.execute("processor");
     }
 
-    /** A JSON Kafka sink; a null value from the value function becomes a tombstone. */
+    /**
+     * A JSON Kafka sink; a null value from the value function becomes a tombstone. Exactly-once: records are
+     * written in a Kafka transaction that commits with the checkpoint, so a crash rolls output back together with
+     * state. Consumers must read_committed. The transaction timeout must not exceed the broker's
+     * transaction.max.timeout.ms (15 min by default); Flink's own default of one hour would.
+     */
     static <T> KafkaSink<T> sink(String brokers, String topic, SerializableFunction<T, String> key, SerializableFunction<T, Object> value) {
         KafkaRecordSerializationSchema<T> schema = (element, context, timestamp) -> {
             try {
@@ -65,7 +70,9 @@ public final class ProcessorJob {
         return KafkaSink.<T>builder()
                 .setBootstrapServers(brokers)
                 .setRecordSerializer(schema)
-                .setDeliveryGuarantee(DeliveryGuarantee.AT_LEAST_ONCE)
+                .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)
+                .setTransactionalIdPrefix(topic)
+                .setProperty("transaction.timeout.ms", "600000")
                 .build();
     }
 

@@ -26,6 +26,7 @@ CONSUMER = [
     "--bootstrap-server", "kafka:9092",
     "--topic", TOPIC,
     "--from-beginning",
+    "--isolation-level", "read_committed",  # the Flink topics are written transactionally
     "--formatter-property", "print.key=true",
     "--formatter-property", f"key.separator={SEP}",
 ]
