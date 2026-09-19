@@ -19,7 +19,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The sweep and expiry the Go loop does by polling, driven here through timers; merge rules come from the goldens. */
+/** Sweep and expiry, driven through timers; merge rules come from the goldens. */
 class StateFunctionTest {
     static final Instant BASE = Instant.parse("2026-09-14T15:00:00Z");
     static final long EXPIRE_MS = 300_000;
@@ -85,7 +85,7 @@ class StateFunctionTest {
         assertEquals(0, out().size(), "nothing new: nothing republished");
     }
 
-    /** The merge rules are pinned by internal/wire/testdata/merge.json, the same scenarios the Go processor runs. */
+    /** The merge rules are pinned by internal/wire/testdata/merge.json. */
     @TestFactory
     List<DynamicTest> mergeGolden() throws Exception {
         List<DynamicTest> tests = new ArrayList<>();

@@ -11,11 +11,10 @@ up:
 archive-ls:
     find archive -name '*.parquet' | sort | tail -n 20
 
-# Serve a live map of a state topic on localhost:8082 (dev only; reads Kafka through the compose container).
-# `just map aircraft.state.flink` shows the Flink processor's output instead.
+# Serve a live map of aircraft.state on localhost:8082 (dev only; reads Kafka through the compose container)
 [working-directory: 'map']
-map topic='aircraft.state':
-    TOPIC={{quote(topic)}} python3 map.py
+map:
+    python3 map.py
 
 # List Kafka topics
 kafka-topics:

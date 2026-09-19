@@ -18,7 +18,7 @@ log = logging.getLogger("map")
 
 SEP = "\t"
 PORT = 8082
-TOPIC = os.environ.get("TOPIC", "aircraft.state")  # aircraft.state.flink shows the Flink processor's output
+TOPIC = os.environ.get("TOPIC", "aircraft.state")
 # `docker run` (unlike `compose exec`) forwards signals into the container, so terminate() cleanly stops the consumer.
 CONSUMER = [
     "docker", "run", "--rm", "--init", "--network", "listening-post_default", "apache/kafka:4.3.1",
@@ -26,7 +26,7 @@ CONSUMER = [
     "--bootstrap-server", "kafka:9092",
     "--topic", TOPIC,
     "--from-beginning",
-    "--isolation-level", "read_committed",  # the Flink topics are written transactionally
+    "--isolation-level", "read_committed",  # the processor writes transactionally
     "--formatter-property", "print.key=true",
     "--formatter-property", f"key.separator={SEP}",
 ]

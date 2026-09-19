@@ -6,8 +6,8 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
- * Keyed state for one aircraft: its snapshot plus the event time at which each field was last set. A port of
- * internal/processor/state.go. Flink POJO: public fields, no-arg constructor, only basic and array field types.
+ * Keyed state for one aircraft: its snapshot plus the event time at which each field was last set. Flink POJO:
+ * public fields, no-arg constructor, only basic and array field types.
  */
 public class Aircraft {
     // indexes into fieldTs; a long[] rather than a Map so Flink's POJO serializer handles it without Kryo
@@ -78,7 +78,7 @@ public class Aircraft {
         return true;
     }
 
-    /** Silent for longer than expireMs as of now (processing time against event time, same as the Go sweep). */
+    /** Silent for longer than expireMs as of now (processing time against event time). */
     public boolean expired(long nowMs, long expireMs) {
         return nowMs - snap.lastSeen.toEpochMilli() > expireMs;
     }

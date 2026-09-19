@@ -19,14 +19,14 @@ import java.nio.charset.StandardCharsets;
 import java.util.Objects;
 
 /**
- * The Go processor (internal/processor) re-implemented as one Flink job, reading the same events.raw but writing
- * to its own topics so the two can be compared. Decode is a stateless flatMap; state is a keyed process function,
- * so Flink's checkpoints replace the Go side's warm-up-from-compacted-topic and partition alignment.
+ * The processor: decodes events.raw onto events.decoded and folds that into aircraft.state. Decode is a stateless
+ * flatMap; state is a keyed process function whose state Flink checkpoints. Topic names are pinned: auto-create
+ * is off and compose's kafka-init declares exactly these.
  */
 public final class ProcessorJob {
     static final String RAW = "events.raw";
-    static final String DECODED = "events.decoded.flink";
-    static final String STATE = "aircraft.state.flink";
+    static final String DECODED = "events.decoded"; // parsed lines, keyed by ICAO
+    static final String STATE = "aircraft.state";   // compacted: latest snapshot per aircraft, keyed by ICAO
 
     public static void main(String[] args) throws Exception {
         String brokers = Objects.requireNonNull(System.getenv("KAFKA_BROKERS"), "KAFKA_BROKERS is not set");

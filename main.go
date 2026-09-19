@@ -12,17 +12,15 @@ import (
 
 	"github.com/matthew-vance/listening-post/internal/archiver"
 	"github.com/matthew-vance/listening-post/internal/gateway"
-	"github.com/matthew-vance/listening-post/internal/processor"
 )
 
 type service func(ctx context.Context, logger *slog.Logger) error
 
 // services run together in one process, connected through Kafka rather than each other. Each Run documents its
-// own environment; the names are disjoint so they can share one.
+// own environment; the names are disjoint so they can share one. The processor is a Flink job (flink/), not here.
 var services = map[string]service{
-	"gateway":   svc(gateway.LoadConfig, gateway.Run),
-	"processor": svc(processor.LoadConfig, processor.Run),
-	"archiver":  svc(archiver.LoadConfig, archiver.Run),
+	"gateway":  svc(gateway.LoadConfig, gateway.Run),
+	"archiver": svc(archiver.LoadConfig, archiver.Run),
 }
 
 func svc[C any](load func(func(string) string) (C, error), run func(context.Context, C, *slog.Logger) error) service {

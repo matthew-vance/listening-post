@@ -2,7 +2,7 @@ package listeningpost;
 
 import java.util.function.Function;
 
-/** SBS-1 BaseStation line parser, a port of internal/processor/sbs.go: positional, identical for every message type. */
+/** SBS-1 BaseStation line parser: positional, identical for every message type. */
 final class Sbs {
     static final int FIELDS = 22;
 

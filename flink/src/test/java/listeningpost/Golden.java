@@ -8,9 +8,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Loads the golden fixtures shared with the Go processor (internal/wire/testdata, on the test classpath via
- * pom.xml). Values compare as decoded JSON with numbers as doubles: Jackson writes a Double 505 as 505.0 where Go
- * writes 505, the same JSON number.
+ * Loads the golden fixtures (internal/wire/testdata, on the test classpath via pom.xml). Values compare as
+ * decoded JSON with numbers as doubles: Jackson writes a Double 505 as 505.0 where the fixtures write 505, the
+ * same JSON number.
  */
 final class Golden {
     private Golden() {}
@@ -65,7 +65,7 @@ final class Golden {
         return v;
     }
 
-    /** A Java object as Go-comparable JSON: serialize with the production mapper, then normalize. */
+    /** A Java object as fixture-comparable JSON: serialize with the production mapper, then normalize. */
     static Object json(Object o) throws Exception {
         return normalize(Json.MAPPER.readValue(Json.MAPPER.writeValueAsString(o), Object.class));
     }

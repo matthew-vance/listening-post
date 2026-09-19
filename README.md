@@ -19,14 +19,13 @@ flowchart LR
     subgraph server [Server]
         subgraph binary [listening-post]
             gateway
-            processor
             archiver
         end
         traefik --> gateway
         gateway --> postgres[(postgres)]
         gateway -- "events.raw" --> kafka[(kafka)]
         kafka --> archiver --> archive[(parquet)]
-        kafka -- "events.raw" --> processor -- "events.decoded, aircraft.state" --> kafka
+        kafka -- "events.raw" --> processor[processor, Flink] -- "events.decoded, aircraft.state" --> kafka
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -54,7 +53,7 @@ Resilience is three layers, each for a distinct failure mode: the loops retry *i
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `INGEST_BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `PUBLISH_BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The server side is one Go binary (`main.go`, `internal/`) running the gateway, processor, and archiver as goroutines in one container via `docker compose` (`just up`) behind Traefik. They talk through Kafka, not each other, so any one can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The three share one environment, so their variable names are disjoint.
+The server side is one Go binary (`main.go`, `internal/`) running the gateway and archiver as goroutines in one container via `docker compose` (`just up`) behind Traefik, plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, so either Go loop can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The two share one environment, so their variable names are disjoint.
 
 The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
 
@@ -137,7 +136,7 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 
 ### Processor
 
-`internal/processor/` is the one place SBS-1 is parsed. It reads `events.raw` and writes one typed JSON record per line to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data.
+`flink/` is the one place SBS-1 is parsed: a Flink DataStream job (see `docs/adr/0001-processor-as-flink-job.md` for why not Go). A stateless `flatMap` reads `events.raw` and writes one typed JSON record per line to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data.
 
 The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus the [SBS-1 fields](http://woodair.net/sbs/article/barebones42_socket_data.htm), present only when the line carried them:
 
@@ -160,7 +159,7 @@ The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus th
 
 #### Aircraft state
 
-A second loop in the same service folds `events.decoded` into per-aircraft state and publishes a **full snapshot** (never a delta) to `aircraft.state` whenever something changes, keyed by ICAO. The topic is compacted, so it *is* the current picture of the sky: a consumer reads it from the beginning to get every live aircraft, then tails it for updates. An aircraft silent for `EXPIRE_SECONDS` gets a tombstone and drops out.
+The decoded stream is then keyed by ICAO into a `KeyedProcessFunction` that folds it into per-aircraft state and publishes a **full snapshot** (never a delta) to `aircraft.state` whenever something changes. The topic is compacted, so it *is* the current picture of the sky: a consumer reads it from the beginning to get every live aircraft, then tails it for updates. An aircraft silent for `EXPIRE_SECONDS` gets a tombstone and drops out.
 
 ```json
 {"icao":"A22123","callsign":"AAL433","altitude":8275,"ground_speed":117,"track":240,"lat":40.14684,"lon":-83.17065,
@@ -168,9 +167,9 @@ A second loop in the same service folds `events.decoded` into per-aircraft state
  "first_seen":"…","last_seen":"…","position_ts":"…","stations":["3ae884ac-…"],"messages":412}
 ```
 
-Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. An aircraft still heard from but unchanged is republished on the next expiry sweep (≤10 s) so `last_seen` and `messages` stay current. Each instance holds state only for the `events.decoded` partitions it owns, rebuilding it from the compacted topic when a partition is assigned and forgetting it when one is revoked, so restarts and rebalances are invisible downstream.
+Each field updates only from a message at least as new as the one that last set it, so a station draining an old backlog can't regress live state while still filling anything newer messages lacked. State is one `ValueState<Aircraft>` per aircraft with a processing-time timer per aircraft that fires every 10 s: it tombstones the aircraft if it has been silent for `EXPIRE_SECONDS`, and republishes it if it was heard from but unchanged so `last_seen` and `messages` stay current. Processing time rather than event time because an idle receiver would stall watermarks and nothing would ever expire.
 
-It consumes `events.decoded` rather than deriving state inside the decode loop because decoded partitions are keyed by ICAO: multiple processor instances split *aircraft* between them, not stations. A snapshot is written to the same partition number of `aircraft.state` its messages arrived on, so `aircraft.state` needs at least as many partitions as `events.decoded` and must be compacted; the processor checks both at startup and refuses to run otherwise.
+The job runs in application mode: `flink-jobmanager` runs the one job baked into the image, `flink-taskmanager` does the work, and checkpoints go to a shared volume. Checkpoints are retained rather than deleted on failure, and the jobmanager's entrypoint resumes from the newest complete one, so a restart of either container picks up where it left off without ZooKeeper or Kubernetes HA. The sinks are exactly-once: output is written in a Kafka transaction that commits with each checkpoint (every 2 s), so a crash rolls state and output back together — no duplicate snapshots and exact `messages` counts. The cost is latency: a consumer with `isolation.level=read_committed` (`just map` sets it) sees records only once the checkpoint commits, so the interval is kept short. The Flink UI is at http://localhost:8083. There's no JDK on the host: `just test-flink` builds the image, and the build stage runs the JUnit tests.
 
 | Variable                | Default           | Purpose                                   |
 |-------------------------|-------------------|-------------------------------------------|
@@ -179,23 +178,13 @@ It consumes `events.decoded` rather than deriving state inside the decode loop b
 
 #### Map
 
-`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` inside the compose container, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old. `just map aircraft.state.flink` shows the Flink processor's output instead.
-
-### Flink processor
-
-`flink/` is the processor re-implemented as an [Apache Flink](https://flink.apache.org) DataStream job, for learning. It runs alongside the Go one: same `events.raw` in, its own `events.decoded.flink` and `aircraft.state.flink` out, so the two can be compared on identical input. Same parse, same merge rules, same expiry and republish behaviour; both are tested against the golden fixtures in `internal/wire/testdata/`.
-
-The shape differs where Flink changes the problem. Decode is a stateless `flatMap`; state is a `KeyedProcessFunction` keyed by ICAO with one `ValueState<Aircraft>` per aircraft and a processing-time timer per aircraft that fires every 10 s to expire or republish it. Flink checkpoints that state, so the Go side's warm-up-from-compacted-topic and partition alignment don't exist here: Kafka partitions of `aircraft.state.flink` are just the default key hash.
-
-It runs in application mode: `flink-jobmanager` runs the one job baked into the image, `flink-taskmanager` does the work, and checkpoints go to a shared volume. Checkpoints are retained rather than deleted on failure, and the jobmanager's entrypoint resumes from the newest complete one, so a restart of either container picks up where it left off without ZooKeeper or Kubernetes HA. The sinks are exactly-once: output is written in a Kafka transaction that commits with each checkpoint (every 2 s), so a crash rolls state and output back together — no duplicate snapshots and exact `messages` counts, which the Go processor's replay can't promise. The cost is latency: a consumer with `isolation.level=read_committed` (`just map` sets it) sees records only once the checkpoint commits, so the interval is kept short. The Flink UI is at http://localhost:8083. `KAFKA_BROKERS` and `EXPIRE_SECONDS` mean the same as for the Go processor.
-
-There's no JDK on the host: `just test-flink` builds the image, and the build stage runs the JUnit tests.
+`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` inside the compose container, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old.
 
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created, and their names are constants in `internal/wire/`: `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created, and their names are constants in the code that produces them (`internal/wire/` for the gateway, `ProcessorJob.java` for the processor): `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
-The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`). All three record formats live there — `Event`, `Decoded`, `Snapshot` — and `internal/wire/testdata/` holds golden fixtures: raw line → decoded record and message sequence → snapshots (run by both the Go processor's and the Flink job's tests), and the heartbeat and events request bodies (produced by the station's tests, accepted by the gateway's), so every cross-language contract is checked against the same data rather than kept in step by hand. See `CONTEXT.md` for the vocabulary. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates (they carry distinct offsets); the state fold tolerates them.
+The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`; the processor's `Decoded` and `Snapshot` live in `flink/`). `internal/wire/testdata/` holds golden fixtures: raw line → decoded record and message sequence → snapshots (run by the processor's tests), and the heartbeat and events request bodies (produced by the station's tests, accepted by the gateway's), so every cross-language contract is checked against the same data rather than kept in step by hand. See `CONTEXT.md` for the vocabulary. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates (they carry distinct offsets); the state fold tolerates them.
 
 - `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
 - Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.

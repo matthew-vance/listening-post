@@ -94,7 +94,7 @@ services:
       retries: 10
 
   # One-shot: declares topics and exits. Re-runs harmlessly on every `up` (--if-not-exists).
-  # Names must match the constants in internal/wire/wire.go.
+  # Names must match the constants in internal/wire/wire.go and flink/.../ProcessorJob.java.
   kafka-init:
     image: apache/kafka:4.3.1
     depends_on:
@@ -111,12 +111,7 @@ services:
         compact="--config cleanup.policy=compact --config segment.ms=600000 --config min.cleanable.dirty.ratio=0.1"
         topic events.raw
         topic events.decoded
-        # The processor checks at startup that this has >= events.decoded's partitions and is compacted.
         topic aircraft.state $$compact
-        # Flink twins of the two above: the Flink job reads the same events.raw and writes here, so its output
-        # can be compared with the Go processor's. Names must match the constants in flink/.../ProcessorJob.java.
-        topic events.decoded.flink
-        topic aircraft.state.flink $$compact
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
@@ -130,8 +125,8 @@ services:
       kafka:
         condition: service_healthy
 
-  # The Go processor re-implemented as a Flink job (flink/), running side by side for comparison. Application
-  # mode: the jobmanager runs the one job baked into the image; the taskmanager does the work. Checkpoints are
+  # The processor (flink/). Application mode: the jobmanager runs the one job baked into the image; the
+  # taskmanager does the work. Checkpoints are
   # retained on a shared volume, and the jobmanager resumes from the newest complete one on start, so any
   # restart recovers state without ZooKeeper/Kubernetes HA; see README.
   flink-jobmanager:
@@ -163,9 +158,6 @@ services:
         execution.checkpointing.interval: 2s
         execution.checkpointing.dir: file:///opt/flink/checkpoints
         execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
-        restart-strategy.type: fixed-delay
-        restart-strategy.fixed-delay.attempts: 10
-        restart-strategy.fixed-delay.delay: 5s
     volumes:
       - flink-checkpoints:/opt/flink/checkpoints
     ports:

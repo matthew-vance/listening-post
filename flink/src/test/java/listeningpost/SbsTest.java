@@ -9,7 +9,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Decode is pinned by internal/wire/testdata/decode.json, the same cases the Go processor runs. */
+/** Decode is pinned by internal/wire/testdata/decode.json. */
 class SbsTest {
     @TestFactory
     List<DynamicTest> decodeGolden() throws Exception {
