@@ -3,23 +3,28 @@ package archiver
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/matthew-vance/listening-post/internal/pause"
 	"github.com/matthew-vance/listening-post/internal/wire"
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// Run archives events.raw to Parquet until ctx is cancelled. When gate pauses, the current session is cancelled —
-// its pending batch flushed and committed, the client closed so the consumer group is released — and Run waits
-// for the resume, then reconnects at the group's committed offset. The backfill moves that offset itself while
-// the archiver is away, so the replay isn't re-archived.
+// Run archives events.raw to Parquet until ctx is cancelled. When gate pauses, the current session first drains
+// the topic — ingest is refusing events by then, so the end is fixed — then flushes and commits, and closes the
+// client so the consumer group is released. Run then waits for the resume and reconnects at the group's
+// committed offset; the backfill moves that offset itself while the archiver is away, so the replay isn't
+// re-archived. Draining matters because the backfill truncates the topic next: anything not yet polled would be
+// gone from the archive for good.
 func Run(ctx context.Context, cfg Config, logger *slog.Logger, gate *pause.Gate) error {
 	for {
 		changed := gate.Changed() // before Paused, so a transition between the two is never missed
 		if gate.Paused() {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				logger.Info("shut down")
+				return nil
 			case <-changed:
 			}
 			continue
@@ -32,6 +37,7 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger, gate *pause.Gate)
 		go func() {
 			select {
 			case <-changed:
+				a.drain(session)
 				stop()
 			case <-session.Done():
 			}
@@ -45,6 +51,46 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger, gate *pause.Gate)
 		}
 		logger.Info("paused")
 	}
+}
+
+// drain blocks until every partition has been consumed to its end, checking once a second. The first check waits
+// a tick so a request already past the gateway's 503 check can still land its batch.
+func (a *archiver) drain(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+		if a.caughtUp(ctx) {
+			return
+		}
+	}
+}
+
+// caughtUp compares what this session has consumed (seeded from the committed offsets on join) with each
+// partition's end. A partition with neither a commit nor a fetch yet is read from its start.
+func (a *archiver) caughtUp(ctx context.Context) bool {
+	adm := kadm.NewClient(a.client)
+	start, err := adm.ListStartOffsets(ctx, a.KafkaRaw)
+	if err != nil {
+		return false
+	}
+	end, err := adm.ListEndOffsets(ctx, a.KafkaRaw)
+	if err != nil {
+		return false
+	}
+	consumed := a.client.UncommittedOffsets()[a.KafkaRaw]
+	for p, e := range end[a.KafkaRaw] {
+		at := start[a.KafkaRaw][p].Offset
+		if o, ok := consumed[p]; ok {
+			at = o.Offset
+		}
+		if e.Err != nil || at < e.Offset {
+			return false
+		}
+	}
+	return true
 }
 
 // open connects to Kafka and pings, failing at startup rather than on the first record.

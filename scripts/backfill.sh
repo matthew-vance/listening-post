@@ -18,8 +18,37 @@ echo "== pausing ingest and the archiver =="
 # The gateway keeps serving heartbeats/readyz; the events endpoint answers 503 (stations buffer) and the
 # archiver's consumer closes, so it won't re-archive the replay.
 admin() { curl -sf -X POST "http://localhost:9091/$1" >/dev/null; }
+# Sum the LAG column. A group with no committed offsets yet (the topic was just recreated) reports a huge lag
+# rather than 0, so "not started" isn't mistaken for "caught up". max=0 for the processor (ingest is still
+# paused, so its lag reaches exactly 0); a small positive threshold for the writer, which follows the live tail.
+wait_lag() {
+  local group="$1" max="$2"
+  while true; do
+    lag=$(docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+      --describe --group "$group" 2>/dev/null | awk '$6 ~ /^[0-9]+$/ {s+=$6; n++} END {print (n==0 ? 999999999 : s)}')
+    if [ "$lag" -le "$max" ]; then
+      echo "$group caught up (lag $lag)"
+      return
+    fi
+    sleep 2
+  done
+}
+# The describe output says so once the last member has left; until then a consumer is still attached.
+wait_left() {
+  until docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+    --describe --group "$1" 2>/dev/null | grep -q "has no active members"; do
+    sleep 1
+  done
+  echo "$1 left the group"
+}
 admin pause
 trap 'admin resume' EXIT
+
+echo "== waiting for the archiver to drain and leave =="
+# On pause the archiver reads events.raw to its end, flushes, commits, and leaves. Both must be true before the
+# truncation: lag 0 means nothing unarchived gets deleted; no members means nothing reads the replay.
+wait_lag archiver 0
+wait_left archiver
 
 echo "== stopping the processor =="
 docker compose stop flink-jobmanager flink-taskmanager >/dev/null
@@ -54,21 +83,6 @@ echo "== restarting the processor =="
 docker compose up -d flink-jobmanager flink-taskmanager >/dev/null
 
 echo "== waiting for the fold to drain =="
-# Sum the LAG column. A group with no committed offsets yet (the topic was just recreated) reports a huge lag
-# rather than 0, so "not started" isn't mistaken for "caught up". max=0 for the processor (ingest is still
-# paused, so its lag reaches exactly 0); a small positive threshold for the writer, which follows the live tail.
-wait_lag() {
-  local group="$1" max="$2"
-  while true; do
-    lag=$(docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-      --describe --group "$group" 2>/dev/null | awk '$6 ~ /^[0-9]+$/ {s+=$6; n++} END {print (n==0 ? 999999999 : s)}')
-    if [ "$lag" -le "$max" ]; then
-      echo "$group caught up (lag $lag)"
-      return
-    fi
-    sleep 2
-  done
-}
 wait_lag flink-processor 0
 
 echo "== pointing the archiver at the tail =="
