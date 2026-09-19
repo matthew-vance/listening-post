@@ -21,7 +21,7 @@ def fixed_clock() -> datetime:
 
 
 def count(db: sqlite3.Connection) -> int:
-    return db.execute("SELECT count(*) FROM events").fetchone()[0]
+    return buffer.sample(db).depth
 
 
 class ScriptedReader:
@@ -51,7 +51,7 @@ class IngestTest(unittest.TestCase):
         path = str(Path(self.tmp.name) / "events.db")
         buffer.create(path)
         self.db = buffer.open(path)
-        self.reader = sqlite3.connect(path)  # separate connection: sees only committed rows
+        self.reader = buffer.open(path, readonly=True)  # separate connection: sees only committed rows
         self.addCleanup(self.db.close)
         self.addCleanup(self.reader.close)
 
@@ -61,12 +61,11 @@ class IngestTest(unittest.TestCase):
         written = ingest(read, self.db, fixed_clock, batch_size=BIG, flush_after=NEVER)
 
         self.assertEqual(written, 2)
-        rows = self.reader.execute("SELECT id, ts, raw FROM events ORDER BY id").fetchall()
         self.assertEqual(
-            rows,
+            buffer.next_batch(self.reader, 10),
             [
-                (1, FIXED.isoformat(), "MSG,1,1,1,ABC123,1"),
-                (2, FIXED.isoformat(), "MSG,3,1,1,ABC123,1,,,,,35000"),
+                {"id": 1, "ts": FIXED.isoformat(), "raw": "MSG,1,1,1,ABC123,1"},
+                {"id": 2, "ts": FIXED.isoformat(), "raw": "MSG,3,1,1,ABC123,1,,,,,35000"},
             ],
         )
 

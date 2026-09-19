@@ -39,8 +39,13 @@ class BufferTest(unittest.TestCase):
 
         batch = buffer.next_batch(self.db, 2)
         self.assertEqual(batch, [{"id": 1, "ts": "t1", "raw": "a"}, {"id": 2, "ts": "t2", "raw": "b"}])
-        buffer.ack(self.db, batch[-1]["id"])
+        buffer.ack(self.db, batch)
         self.assertEqual(buffer.next_batch(self.db, 2), [{"id": 3, "ts": "t3", "raw": "c"}])
+
+    def test_ack_deletes_only_the_given_batch(self) -> None:
+        buffer.append(self.db, [("t1", "a"), ("t2", "b"), ("t3", "c")])
+        buffer.ack(self.db, [{"id": 2, "ts": "t2", "raw": "b"}])
+        self.assertEqual([e["id"] for e in buffer.next_batch(self.db, 10)], [1, 3])
 
     def test_append_is_one_transaction_visible_to_other_connections(self) -> None:
         reader = buffer.open(self.path, readonly=True)
@@ -53,7 +58,7 @@ class BufferTest(unittest.TestCase):
 
     def test_sample_seq_survives_deletes(self) -> None:
         buffer.append(self.db, [("t1", "a"), ("t2", "b"), ("t3", "c")])
-        buffer.ack(self.db, 1)
+        buffer.ack(self.db, buffer.next_batch(self.db, 1))
         self.assertEqual(buffer.sample(self.db), BufferStats(depth=2, oldest_ts="t2", seq=3))
 
 

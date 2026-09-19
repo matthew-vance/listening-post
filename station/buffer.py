@@ -66,9 +66,9 @@ def next_batch(db: sqlite3.Connection, limit: int) -> list[Event]:
     return [Event(id=row["id"], ts=row["ts"], raw=row["raw"]) for row in rows]
 
 
-def ack(db: sqlite3.Connection, upto_id: int) -> None:
-    # publish is the only deleter and always drains from the head, so id <= is safe
-    db.execute("DELETE FROM events WHERE id <= ?", (upto_id,))
+def ack(db: sqlite3.Connection, batch: list[Event]) -> None:
+    """Delete exactly the events of a batch next_batch handed out, in one transaction."""
+    db.executemany("DELETE FROM events WHERE id = ?", [(e["id"],) for e in batch])
     db.commit()
 
 

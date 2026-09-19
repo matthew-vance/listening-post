@@ -10,7 +10,7 @@ from station.publish import publish_once
 
 
 def count(db: sqlite3.Connection) -> int:
-    return db.execute("SELECT count(*) FROM events").fetchone()[0]
+    return buffer.sample(db).depth
 
 
 class PublishOnceTest(unittest.TestCase):

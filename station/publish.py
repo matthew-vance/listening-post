@@ -15,7 +15,7 @@ def publish_once(db: sqlite3.Connection, post: Callable[[list[Event]], None], ba
     if not batch:
         return 0
     post(batch)
-    buffer.ack(db, batch[-1]["id"])
+    buffer.ack(db, batch)
     log.info("published %d events (ids %d..%d)", len(batch), batch[0]["id"], batch[-1]["id"])
     return len(batch)
 
