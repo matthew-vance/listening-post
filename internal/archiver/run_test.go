@@ -170,3 +170,37 @@ func TestRunDrainsOnPause(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 }
+
+func TestRunLeavesOnPauseWhenAlreadyCaughtUp(t *testing.T) {
+	topic := kafkatest.Topic(t)
+	v, _ := json.Marshal(wire.Event{StationID: station, ID: 1, TS: t0, Raw: "MSG,1", ReceivedAt: t0})
+	kafkatest.Produce(t, &kgo.Record{Topic: topic, Key: []byte(station), Value: v})
+
+	dir := t.TempDir()
+	cfg := Config{KafkaBrokers: kafkatest.Brokers, KafkaRaw: topic, ArchiverGroup: "g_" + topic, ArchiveDir: dir, FlushRecords: 1, FlushSeconds: 1}
+
+	gate := pause.New()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), gate) }()
+	// the record is flushed and committed before the pause: the partition is caught up with nothing pending
+	for deadline := time.Now().Add(20 * time.Second); countFiles(t, dir) == 0 && time.Now().Before(deadline); {
+		time.Sleep(200 * time.Millisecond)
+	}
+	gate.Pause()
+
+	// the drain must see the committed position as caught up and leave; a stuck drain keeps the member
+	client, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	adm := kadm.NewClient(client)
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
+		if g, err := adm.DescribeGroups(t.Context(), cfg.ArchiverGroup); err == nil && len(g[cfg.ArchiverGroup].Members) == 0 {
+			return
+		}
+	}
+	t.Fatal("archiver never left the group after a pause on an already caught-up topic")
+}

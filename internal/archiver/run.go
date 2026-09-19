@@ -68,8 +68,9 @@ func (a *archiver) drain(ctx context.Context) {
 	}
 }
 
-// caughtUp compares what this session has consumed (seeded from the committed offsets on join) with each
-// partition's end. A partition with neither a commit nor a fetch yet is read from its start.
+// caughtUp compares this session's position on each partition with its end. UncommittedOffsets only lists
+// partitions with something polled since the last commit, so a partition that is fully committed falls back to
+// CommittedOffsets, and one with neither (never committed, nothing fetched yet) is read from its start.
 func (a *archiver) caughtUp(ctx context.Context) bool {
 	adm := kadm.NewClient(a.client)
 	start, err := adm.ListStartOffsets(ctx, a.KafkaRaw)
@@ -80,9 +81,12 @@ func (a *archiver) caughtUp(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	consumed := a.client.UncommittedOffsets()[a.KafkaRaw]
+	consumed, committed := a.client.UncommittedOffsets()[a.KafkaRaw], a.client.CommittedOffsets()[a.KafkaRaw]
 	for p, e := range end[a.KafkaRaw] {
 		at := start[a.KafkaRaw][p].Offset
+		if o, ok := committed[p]; ok {
+			at = o.Offset
+		}
 		if o, ok := consumed[p]; ok {
 			at = o.Offset
 		}
