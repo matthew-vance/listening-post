@@ -20,6 +20,8 @@ type archiver struct {
 
 // run consumes until ctx is cancelled, flushing a batch to Parquet every flushRecords or flushAfter, whichever
 // comes first, and committing offsets only after the batch's files are all in place. A final flush runs on exit.
+// Everything a poll returned goes into pending before any exit path can commit: a poll is "uncommitted" the
+// moment it returns, so committing without its rows on disk would lose them from the archive for good.
 // ponytail: single goroutine, one instance; add per-partition workers when ~33 rec/s becomes thousands.
 func (a *archiver) run(ctx context.Context) error {
 	pending := make([]row, 0, a.flushRecords)
@@ -28,12 +30,6 @@ func (a *archiver) run(ctx context.Context) error {
 		pollCtx, cancel := context.WithDeadline(ctx, lastFlush.Add(a.flushAfter))
 		fetches := a.client.PollRecords(pollCtx, a.flushRecords-len(pending))
 		cancel()
-		if ctx.Err() != nil {
-			return a.flush(pending)
-		}
-		if err := fetches.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("poll: %w", err)
-		}
 		fetches.EachRecord(func(rec *kgo.Record) {
 			r, err := decode(rec)
 			if err != nil {
@@ -41,6 +37,12 @@ func (a *archiver) run(ctx context.Context) error {
 			}
 			pending = append(pending, r)
 		})
+		if ctx.Err() != nil {
+			return a.flush(pending)
+		}
+		if err := fetches.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("poll: %w", err)
+		}
 
 		if len(pending) >= a.flushRecords || time.Since(lastFlush) >= a.flushAfter {
 			if err := a.flush(pending); err != nil {
