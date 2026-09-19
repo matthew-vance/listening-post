@@ -4,9 +4,13 @@
 package wire
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // RawTopic is pinned: auto-create is off and compose's kafka-init declares it (with the processor's topics, named
@@ -20,6 +24,19 @@ func Brokers(getenv func(string) string) ([]string, error) {
 		return nil, errors.New("KAFKA_BROKERS is not set")
 	}
 	return strings.Split(v, ","), nil
+}
+
+// OpenKafka connects and pings so a bad broker address fails at startup, not on the first record.
+func OpenKafka(ctx context.Context, brokers []string, opts ...kgo.Opt) (*kgo.Client, error) {
+	client, err := kgo.NewClient(append([]kgo.Opt{kgo.SeedBrokers(brokers...)}, opts...)...)
+	if err != nil {
+		return nil, fmt.Errorf("configure kafka client: %w", err)
+	}
+	if err := client.Ping(ctx); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("connect to kafka: %w", err)
+	}
+	return client, nil
 }
 
 // Event is the format on events.raw: one record per SBS-1 line, keyed by station. Delivery is at-least-once:

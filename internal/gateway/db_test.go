@@ -3,12 +3,9 @@ package gateway
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"flag"
 	"fmt"
 	"net/url"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -23,30 +20,7 @@ import (
 // adminURL points at the shared test container; each test gets its own database off it.
 var adminURL string
 
-func TestMain(m *testing.M) {
-	flag.Parse()
-	if testing.Short() {
-		os.Exit(m.Run())
-	}
-	ctx := context.Background()
-	// The two containers are independent; starting them together saves the whole Postgres boot per run.
-	var pg, kafka testcontainers.Container
-	var pgErr, kafkaErr error
-	var wg sync.WaitGroup
-	wg.Go(func() { pg, pgErr = startPostgres(ctx) })
-	wg.Go(func() { kafka, kafkaErr = kafkatest.Start(ctx) })
-	wg.Wait()
-	if err := errors.Join(pgErr, kafkaErr); err != nil {
-		fmt.Fprintln(os.Stderr, "start containers:", err)
-		_ = testcontainers.TerminateContainer(pg)
-		_ = testcontainers.TerminateContainer(kafka)
-		os.Exit(1)
-	}
-	code := m.Run()
-	_ = testcontainers.TerminateContainer(kafka)
-	_ = testcontainers.TerminateContainer(pg)
-	os.Exit(code)
-}
+func TestMain(m *testing.M) { kafkatest.Main(m, startPostgres) }
 
 func startPostgres(ctx context.Context) (testcontainers.Container, error) {
 	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine",

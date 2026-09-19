@@ -77,10 +77,11 @@ func TestHeartbeatGolden(t *testing.T) {
 			})
 			srv := newServer(slog.New(slog.DiscardHandler), fixedStations, capture, noopPublisher)
 			wantStatus(t, post(srv, "/v1/stations/heartbeat", testToken, string(tc.Body)), http.StatusOK)
-			var want any
-			json.Unmarshal(tc.Body, &want)
-			if got := canonical(t, saved); !reflect.DeepEqual(got, canonical(t, want)) {
-				t.Fatalf("\n got %v\nwant %v", got, canonical(t, want))
+			var body any
+			json.Unmarshal(tc.Body, &body)
+			got, want := canonical(t, saved), canonical(t, body)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("\n got %v\nwant %v", got, want)
 			}
 		})
 	}
@@ -98,9 +99,10 @@ func TestEventsGolden(t *testing.T) {
 	})
 	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture)
 	wantStatus(t, post(srv, "/v1/events", testToken, string(golden.Body)), http.StatusOK)
-	var want struct{ Events any }
-	json.Unmarshal(golden.Body, &want)
-	if got := canonical(t, published); !reflect.DeepEqual(got, canonical(t, want.Events)) {
-		t.Fatalf("\n got %v\nwant %v", got, canonical(t, want.Events))
+	var body struct{ Events any }
+	json.Unmarshal(golden.Body, &body)
+	got, want := canonical(t, published), canonical(t, body.Events)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("\n got %v\nwant %v", got, want)
 	}
 }

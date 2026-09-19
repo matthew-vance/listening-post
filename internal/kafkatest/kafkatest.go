@@ -3,12 +3,14 @@ package kafkatest
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,19 +25,31 @@ import (
 // Brokers points at the shared test broker; each test gets its own topic.
 var Brokers []string
 
-// Main is a TestMain for packages that need only Kafka: start the broker, run the tests, tear it down.
-func Main(m *testing.M) {
+// Main is a TestMain: it starts the Kafka broker and any extra containers in parallel, runs the tests, and tears
+// them all down.
+func Main(m *testing.M, extra ...func(context.Context) (testcontainers.Container, error)) {
 	flag.Parse()
 	if testing.Short() {
 		os.Exit(m.Run())
 	}
-	kafka, err := Start(context.Background())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "start kafka container:", err)
-		os.Exit(1)
+	ctx := context.Background()
+	starts := append([]func(context.Context) (testcontainers.Container, error){Start}, extra...)
+	containers := make([]testcontainers.Container, len(starts))
+	errs := make([]error, len(starts))
+	var wg sync.WaitGroup
+	for i, start := range starts {
+		wg.Go(func() { containers[i], errs[i] = start(ctx) })
 	}
-	code := m.Run()
-	_ = testcontainers.TerminateContainer(kafka)
+	wg.Wait()
+	code := 1
+	if err := errors.Join(errs...); err != nil {
+		fmt.Fprintln(os.Stderr, "start containers:", err)
+	} else {
+		code = m.Run()
+	}
+	for _, c := range containers {
+		_ = testcontainers.TerminateContainer(c)
+	}
 	os.Exit(code)
 }
 
@@ -80,17 +94,23 @@ func Start(ctx context.Context) (testcontainers.Container, error) {
 	return c, nil
 }
 
+func newClient(t *testing.T, opts ...kgo.Opt) *kgo.Client {
+	t.Helper()
+	client, err := kgo.NewClient(append([]kgo.Opt{kgo.SeedBrokers(Brokers...)}, opts...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client
+}
+
 // Topic creates a uniquely named single-partition topic (auto-create is off, as in production) and returns its name.
 func Topic(t *testing.T) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("needs docker")
 	}
-	client, err := kgo.NewClient(kgo.SeedBrokers(Brokers...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
+	client := newClient(t)
 	name := fmt.Sprintf("t_%d", time.Now().UnixNano())
 	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), 1, 1, nil, name); err != nil {
 		t.Fatal(err)
@@ -101,11 +121,7 @@ func Topic(t *testing.T) string {
 // Produce writes records and waits for the broker's ack.
 func Produce(t *testing.T, records ...*kgo.Record) {
 	t.Helper()
-	client, err := kgo.NewClient(kgo.SeedBrokers(Brokers...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
+	client := newClient(t)
 	if err := client.ProduceSync(t.Context(), records...).FirstErr(); err != nil {
 		t.Fatal(err)
 	}
@@ -114,11 +130,7 @@ func Produce(t *testing.T, records ...*kgo.Record) {
 // Consume reads n records from the start of a topic.
 func Consume(t *testing.T, topic string, n int) []*kgo.Record {
 	t.Helper()
-	client, err := kgo.NewClient(kgo.SeedBrokers(Brokers...), kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
+	client := newClient(t, kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	var out []*kgo.Record

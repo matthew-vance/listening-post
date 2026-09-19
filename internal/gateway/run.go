@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/matthew-vance/listening-post/internal/wire"
 )
 
 // Run starts the gateway and blocks until ctx is cancelled.
@@ -19,7 +21,7 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	defer pool.Close()
 	logger.Info("connected to database")
 
-	kafka, err := openKafka(ctx, cfg.KafkaBrokers)
+	kafka, err := wire.OpenKafka(ctx, cfg.KafkaBrokers)
 	if err != nil {
 		return err
 	}

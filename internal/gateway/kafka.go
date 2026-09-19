@@ -10,20 +10,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// openKafka connects and pings so a bad broker address fails at startup, like openDB.
-// Default acks (all ISRs) are what we need: the Pi deletes on our 200, so the broker must have it first.
-func openKafka(ctx context.Context, brokers []string) (*kgo.Client, error) {
-	client, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
-	if err != nil {
-		return nil, fmt.Errorf("configure kafka client: %w", err)
-	}
-	if err := client.Ping(ctx); err != nil {
-		client.Close()
-		return nil, fmt.Errorf("connect to kafka: %w", err)
-	}
-	return client, nil
-}
-
+// kafkaPublisher writes events with the client's default acks (all ISRs), which is what we need: the Pi deletes
+// on our 200, so the broker must have it first.
 type kafkaPublisher struct {
 	client *kgo.Client
 	topic  string
