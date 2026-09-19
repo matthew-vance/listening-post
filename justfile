@@ -5,11 +5,16 @@ up:
     mkdir -p archive && chmod 777 archive
     docker compose up -d --wait postgres
     just migrate
-    docker compose up -d --build
+    docker compose up -d --build --remove-orphans
 
 # Show the newest archived Parquet files
 archive-ls:
     find archive -name '*.parquet' | sort | tail -n 20
+
+# Rebuild Traces from the archive: pauses the stack, wipes the derived topics/table, replays the archive in
+# event-time order, and lets the pipeline re-fold. Destructive; see scripts/backfill.sh.
+backfill:
+    ./scripts/backfill.sh
 
 # Serve a live map of aircraft.state on localhost:8082 (dev only; reads Kafka through the compose container)
 [working-directory: 'map']

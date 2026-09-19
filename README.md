@@ -17,7 +17,7 @@ flowchart LR
         ingest -. "events.db (read-only)" .-> heartbeat
     end
     subgraph server [Server]
-        subgraph binary [listening-post]
+        subgraph services [listening-post: one binary, one container]
             gateway
             archiver
             history
@@ -55,9 +55,9 @@ Resilience is three layers, each for a distinct failure mode: the loops retry *i
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `INGEST_BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `PUBLISH_BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The server side is one Go binary (`main.go`, `internal/`) running the gateway, archiver, and history writer as goroutines in one container via `docker compose` (`just up`) behind Traefik, plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, so any Go loop can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. They share one environment, reading the variables each needs: `KAFKA_BROKERS` in all three, `DATABASE_URL` in the gateway and history writer, `ARCHIVE_DIR` in the archiver.
+The server side is one Go binary (`main.go`, `internal/`) running the gateway, archiver, and history writer as goroutines in one container via `docker compose` (`just up`), plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, and if any service dies the whole binary exits and compose restarts it. Each reads the variables it needs: `KAFKA_BROKERS` everywhere, `DATABASE_URL` in the gateway and history writer, `ARCHIVE_DIR` in the archiver.
 
-The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
+The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes live on a separate admin port (`:9091`); `/readyz` also checks Postgres and Kafka. `POST /ingest/pause` and `/ingest/resume` on that port make the events endpoint answer 503 while the gateway stays up; `POST /archiver/pause` and `/archiver/resume` pause and resume the archiver's consumer in-process. The backfill uses both so it can stop ingest and the archiver without taking the container down.
 
 Traefik is there to terminate TLS once there is a real hostname (add a `websecure` entrypoint and an ACME resolver to `compose.yaml`). **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
 
@@ -145,6 +145,10 @@ ORDER BY position_ts;
 ```
 
 Chunks compress after 7 days (`add_compression_policy`); there is no retention policy yet — history is kept forever until one is wanted.
+
+### Backfill
+
+`just backfill` rebuilds the Traces (and the live picture) from the archive. It pauses ingest and the archiver via the admin endpoint (the gateway keeps serving heartbeats but answers 503 to `POST /v1/events`, so stations buffer), stops the processor, truncates and replays `events.raw` (truncated, not deleted, so the gateway's producer keeps working), truncates `aircraft_traces`, clears the Flink checkpoint, then replays the archive in event-time order (`cmd/backfill`, a Go program that reads `archive/*.parquet` and sorts by `ts`). The processor re-folds the whole history from scratch; the history writer — still running — persists the new Traces; the archiver resumes past the replay. The archive itself is never touched, and the natural Trace key makes the rebuild re-runnable. It's a destructive, one-shot operation — `scripts/backfill.sh` refuses to run if `archive/` is missing or empty.
 
 | Variable        | Default      | Purpose                                          |
 |-----------------|--------------|--------------------------------------------------|
