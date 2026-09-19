@@ -97,6 +97,9 @@ class StateFunctionTest {
         List<Trace> changed = traces();
         assertEquals(1, changed.size(), "a change lands one trace");
         assertEquals("A22123", changed.get(0).icao);
+        assertEquals("s1", changed.get(0).eventStationId, "the trace is keyed by its triggering event");
+        assertEquals(0, changed.get(0).eventId);
+        assertEquals(BASE, changed.get(0).eventTs);
 
         send(msg("s1", BASE.plusSeconds(1), VELOCITY)); // identical: no change
         assertEquals(0, out().size());
@@ -134,7 +137,7 @@ class StateFunctionTest {
         s.spi = false;
         s.onGround = false;
 
-        Trace t = Trace.of(s, "9f8b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d");
+        Trace t = Trace.of(s, "s1", 42, Instant.parse("2026-09-14T15:00:02Z"));
         assertEquals(Golden.normalize(Golden.load("trace.json")), Golden.normalize(t));
     }
 

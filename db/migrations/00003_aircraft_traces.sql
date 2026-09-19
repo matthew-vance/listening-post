@@ -2,9 +2,12 @@
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- The append-only history of an aircraft's changed snapshots (a Trace per change), for drawing flight paths.
--- The idempotency key id is minted by the Flink processor (a UUID) so at-least-once delivery can dedupe on it.
+-- The idempotency key is the identity of the raw Event that triggered the change (station, its sequence number,
+-- and its event time), so at-least-once delivery and a re-fold of the same archive both dedupe on it.
 CREATE TABLE aircraft_traces (
-    id            uuid         NOT NULL,  -- processor-minted idempotency key
+    event_station_id text        NOT NULL,  -- station whose event triggered this trace
+    event_id         bigint      NOT NULL,  -- that event's sequence number
+    event_ts         timestamptz NOT NULL,  -- that event's time (disambiguates a reused id after a buffer reset)
     icao          text         NOT NULL,
     callsign      text,
     altitude      integer,                 -- feet
@@ -27,9 +30,9 @@ CREATE TABLE aircraft_traces (
 
 SELECT create_hypertable('aircraft_traces', 'last_seen', chunk_time_interval => INTERVAL '1 day');
 
--- Dedupe: id is globally unique, so (id, last_seen) is unique too; Timescale requires the partition column
--- to appear in any unique constraint on a hypertable.
-ALTER TABLE aircraft_traces ADD UNIQUE (id, last_seen);
+-- Dedupe on the triggering event: it is globally unique, so the trailing last_seen only satisfies Timescale's
+-- rule that a hypertable's unique constraint must include the partition column.
+ALTER TABLE aircraft_traces ADD UNIQUE (event_station_id, event_id, event_ts, last_seen);
 CREATE INDEX aircraft_traces_icao_time_idx ON aircraft_traces (icao, last_seen DESC);
 
 -- Keep everything (Q7), but compress chunks a week old: flight paths are range scans by icao.
@@ -37,4 +40,5 @@ ALTER TABLE aircraft_traces SET (timescaledb.compress, timescaledb.compress_segm
 SELECT add_compression_policy('aircraft_traces', INTERVAL '7 days');
 
 -- +goose Down
+SELECT remove_compression_policy('aircraft_traces', if_exists => true);
 DROP TABLE aircraft_traces;

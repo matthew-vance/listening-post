@@ -32,5 +32,5 @@ The record that retires an aircraft's Snapshot once it has been silent for the e
 _Avoid_: delete, null record
 
 **Trace**:
-One aircraft's changed Snapshots recorded over time, append-only, for drawing a flight path later. A new Trace lands only when the Snapshot actually changes, so it carries the aircraft's history without the sweep republishes.
-_Avoid_: track (already the SBS heading field), history
+One aircraft's changed Snapshots recorded over time, append-only, for drawing a flight path later. A new Trace lands only when the Snapshot's Payload actually changes, so it carries the aircraft's history without the sweep republishes. Each Trace is keyed by the raw Event that triggered it (station, its sequence number, and its time), so re-folding the same Events yields the same Traces.
+_Avoid_: track (already the SBS heading field)

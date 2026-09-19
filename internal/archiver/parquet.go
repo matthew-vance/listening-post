@@ -24,10 +24,10 @@ type row struct {
 	KafkaTimestamp time.Time `parquet:"kafka_timestamp,timestamp(microsecond)"`
 }
 
-// decode turns a topic record into a row. A value that isn't a gateway event is still archived — sushi principle —
-// with its bytes in raw and zeroed fields, which routes it to the dt=unknown/station=unknown partition; the
-// returned error says why.
-func decode(rec *kgo.Record) (row, error) {
+// decodeRow turns a topic record into a row. A value that isn't a gateway event is still archived — sushi
+// principle — with its bytes in raw and zeroed fields, which routes it to the dt=unknown/station=unknown
+// partition; the returned error says why.
+func decodeRow(rec *kgo.Record) (row, error) {
 	r := row{KafkaPartition: rec.Partition, KafkaOffset: rec.Offset, KafkaTimestamp: rec.Timestamp}
 	var e wire.Event
 	err := json.Unmarshal(rec.Value, &e)

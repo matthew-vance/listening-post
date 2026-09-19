@@ -18,8 +18,8 @@ func TestDecodeTraceGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if row.ID != "9f8b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d" || row.Icao != "A22123" {
-		t.Fatalf("id=%q icao=%q", row.ID, row.Icao)
+	if row.EventStationID != "s1" || row.EventID != 42 || !row.EventTS.Equal(time.Date(2026, 9, 14, 15, 0, 2, 0, time.UTC)) || row.Icao != "A22123" {
+		t.Fatalf("event_station_id=%q event_id=%d event_ts=%v icao=%q", row.EventStationID, row.EventID, row.EventTS, row.Icao)
 	}
 	if !row.FirstSeen.Equal(time.Date(2026, 9, 14, 15, 0, 0, 0, time.UTC)) || !row.LastSeen.Equal(time.Date(2026, 9, 14, 15, 0, 2, 0, time.UTC)) {
 		t.Fatalf("first_seen=%v last_seen=%v", row.FirstSeen, row.LastSeen)
@@ -40,10 +40,11 @@ func TestDecodeTraceGolden(t *testing.T) {
 
 func TestDecodeTraceRejectsMissingIdentity(t *testing.T) {
 	for name, value := range map[string]string{
-		"empty":    `{}`,
-		"no id":    `{"icao":"A22123","first_seen":"2026-09-14T15:00:00Z","last_seen":"2026-09-14T15:00:01Z"}`,
-		"no icao":  `{"id":"9f8b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d","first_seen":"2026-09-14T15:00:00Z","last_seen":"2026-09-14T15:00:01Z"}`,
-		"not json": `not json`,
+		"empty":       `{}`,
+		"no station":  `{"event_id":42,"event_ts":"2026-09-14T15:00:02Z","icao":"A22123","first_seen":"2026-09-14T15:00:00Z","last_seen":"2026-09-14T15:00:01Z"}`,
+		"no icao":     `{"event_station_id":"s1","event_id":42,"event_ts":"2026-09-14T15:00:02Z","first_seen":"2026-09-14T15:00:00Z","last_seen":"2026-09-14T15:00:01Z"}`,
+		"no event ts": `{"event_station_id":"s1","event_id":42,"icao":"A22123","first_seen":"2026-09-14T15:00:00Z","last_seen":"2026-09-14T15:00:01Z"}`,
+		"not json":    `not json`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := decodeTrace([]byte(value)); err == nil {

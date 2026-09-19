@@ -20,25 +20,27 @@ func sampleRow() traceRow {
 	lastSeen := time.Date(2026, 9, 14, 15, 0, 2, 0, time.UTC)
 	positionTs := lastSeen
 	return traceRow{
-		ID:           "9f8b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
-		Icao:         "A22123",
-		Callsign:     &callsign,
-		Altitude:     &altitude,
-		GroundSpeed:  &speed,
-		Track:        &track,
-		Lat:          &lat,
-		Lon:          &lon,
-		VerticalRate: &rate,
-		Squawk:       &squawk,
-		Alert:        &alert,
-		Emergency:    &emergency,
-		Spi:          &spi,
-		OnGround:     &onGround,
-		FirstSeen:    firstSeen,
-		LastSeen:     lastSeen,
-		PositionTs:   &positionTs,
-		Stations:     []string{"s1", "s2"},
-		Messages:     3,
+		EventStationID: "s1",
+		EventID:        42,
+		EventTS:        lastSeen,
+		Icao:           "A22123",
+		Callsign:       &callsign,
+		Altitude:       &altitude,
+		GroundSpeed:    &speed,
+		Track:          &track,
+		Lat:            &lat,
+		Lon:            &lon,
+		VerticalRate:   &rate,
+		Squawk:         &squawk,
+		Alert:          &alert,
+		Emergency:      &emergency,
+		Spi:            &spi,
+		OnGround:       &onGround,
+		FirstSeen:      firstSeen,
+		LastSeen:       lastSeen,
+		PositionTs:     &positionTs,
+		Stations:       []string{"s1", "s2"},
+		Messages:       3,
 	}
 }
 
@@ -57,7 +59,7 @@ func TestInsertDedupes(t *testing.T) {
 	}
 
 	var count int
-	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM aircraft_traces WHERE id = $1", row.ID).Scan(&count); err != nil {
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM aircraft_traces WHERE event_station_id = $1 AND event_id = $2", row.EventStationID, row.EventID).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -66,20 +68,24 @@ func TestInsertDedupes(t *testing.T) {
 
 	// every column round-trips
 	var (
-		icao, gotCallsign, gotSquawk string
-		gotAltitude                  int32
-		gotSpeed, gotTrack, gotLat   float64
-		gotLon                       float64
-		gotFirstSeen, gotLastSeen    time.Time
-		gotStations                  []string
-		gotMessages                  int64
+		gotStation, gotIcao, gotCallsign, gotSquawk string
+		gotEventID                                  int64
+		gotAltitude                                 int32
+		gotSpeed, gotTrack, gotLat                  float64
+		gotLon                                      float64
+		gotEventTs, gotFirstSeen, gotLastSeen       time.Time
+		gotStations                                 []string
+		gotMessages                                 int64
 	)
-	if err := pool.QueryRow(t.Context(), `SELECT icao, callsign, altitude, ground_speed, track, lat, lon, squawk, first_seen, last_seen, stations, messages
-		FROM aircraft_traces WHERE id = $1`, row.ID).Scan(&icao, &gotCallsign, &gotAltitude, &gotSpeed, &gotTrack, &gotLat, &gotLon, &gotSquawk, &gotFirstSeen, &gotLastSeen, &gotStations, &gotMessages); err != nil {
+	if err := pool.QueryRow(t.Context(), `SELECT event_station_id, event_id, event_ts, icao, callsign, altitude, ground_speed, track, lat, lon, squawk, first_seen, last_seen, stations, messages
+		FROM aircraft_traces WHERE event_station_id = $1 AND event_id = $2`, row.EventStationID, row.EventID).Scan(&gotStation, &gotEventID, &gotEventTs, &gotIcao, &gotCallsign, &gotAltitude, &gotSpeed, &gotTrack, &gotLat, &gotLon, &gotSquawk, &gotFirstSeen, &gotLastSeen, &gotStations, &gotMessages); err != nil {
 		t.Fatal(err)
 	}
-	if icao != "A22123" || gotCallsign != "AAL433" || gotAltitude != 8275 || gotSpeed != 117 || gotTrack != 240 || gotLat != 40.14684 || gotLon != -83.17065 || gotSquawk != "6653" {
-		t.Fatalf("row = %+v", map[string]any{"icao": icao, "callsign": gotCallsign, "altitude": gotAltitude, "speed": gotSpeed, "track": gotTrack, "lat": gotLat, "lon": gotLon, "squawk": gotSquawk})
+	if gotStation != "s1" || gotEventID != 42 || !gotEventTs.Equal(row.EventTS) {
+		t.Fatalf("event_station_id=%q event_id=%d event_ts=%v", gotStation, gotEventID, gotEventTs)
+	}
+	if gotIcao != "A22123" || gotCallsign != "AAL433" || gotAltitude != 8275 || gotSpeed != 117 || gotTrack != 240 || gotLat != 40.14684 || gotLon != -83.17065 || gotSquawk != "6653" {
+		t.Fatalf("row = %+v", map[string]any{"icao": gotIcao, "callsign": gotCallsign, "altitude": gotAltitude, "speed": gotSpeed, "track": gotTrack, "lat": gotLat, "lon": gotLon, "squawk": gotSquawk})
 	}
 	if !gotFirstSeen.Equal(row.FirstSeen) || !gotLastSeen.Equal(row.LastSeen) || len(gotStations) != 2 || gotMessages != 3 {
 		t.Fatalf("first_seen=%v last_seen=%v stations=%v messages=%d", gotFirstSeen, gotLastSeen, gotStations, gotMessages)

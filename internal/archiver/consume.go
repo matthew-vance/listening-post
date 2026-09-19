@@ -2,11 +2,11 @@ package archiver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/matthew-vance/listening-post/internal/consume"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -18,38 +18,19 @@ type archiver struct {
 
 // run consumes until ctx is cancelled, flushing a batch to Parquet every flushRecords or flushAfter, whichever
 // comes first, and committing offsets only after the batch's files are all in place. A final flush runs on exit.
-// Everything a poll returned goes into pending before any exit path can commit: a poll is "uncommitted" the
-// moment it returns, so committing without its rows on disk would lose them from the archive for good.
 // ponytail: single goroutine, one instance; add per-partition workers when ~33 rec/s becomes thousands.
 func (a *archiver) run(ctx context.Context) error {
-	flushAfter := time.Duration(a.FlushSeconds) * time.Second
-	pending := make([]row, 0, a.FlushRecords)
-	lastFlush := time.Now()
-	for {
-		pollCtx, cancel := context.WithDeadline(ctx, lastFlush.Add(flushAfter))
-		fetches := a.client.PollRecords(pollCtx, a.FlushRecords-len(pending))
-		cancel()
-		fetches.EachRecord(func(rec *kgo.Record) {
-			r, err := decode(rec)
-			if err != nil {
-				a.logger.Error("archiving undecodable record", "partition", rec.Partition, "offset", rec.Offset, "err", err)
-			}
-			pending = append(pending, r)
-		})
-		if ctx.Err() != nil {
-			return a.flush(pending)
-		}
-		if err := fetches.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("poll: %w", err)
-		}
+	return consume.Batch(ctx, a.client, a.FlushRecords, a.FlushSeconds, a.decode, a.flush)
+}
 
-		if len(pending) >= a.FlushRecords || time.Since(lastFlush) >= flushAfter {
-			if err := a.flush(pending); err != nil {
-				return err
-			}
-			pending, lastFlush = pending[:0], time.Now()
-		}
+// decode turns every record into a row — an undecodable one keeps its bytes in raw (sushi principle) — so the
+// decode error is advisory: logged, never fatal, because the archive keeps what it can't parse.
+func (a *archiver) decode(rec *kgo.Record) (row, error) {
+	r, err := decodeRow(rec)
+	if err != nil {
+		a.logger.Error("archiving undecodable record", "partition", rec.Partition, "offset", rec.Offset, "err", err)
 	}
+	return r, nil
 }
 
 // flush writes rows to Parquet, then commits their offsets. The commit uses a fresh context: on shutdown ctx is

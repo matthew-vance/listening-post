@@ -8,8 +8,6 @@ import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 
-import java.util.UUID;
-
 /**
  * Folds decoded messages into per-aircraft state and publishes a snapshot per change. A processing-time timer
  * per aircraft fires every SWEEP_MS: it tombstones aircraft silent longer than expireMs and republishes ones
@@ -17,8 +15,9 @@ import java.util.UUID;
  * Processing time rather than event time because an idle receiver would stall watermarks and nothing would
  * ever expire.
  *
- * Each changed snapshot is also emitted to the TRACES side output, stamped with a fresh idempotency key, so the
- * history topic gets only real changes — never the sweep's heard-but-unchanged republish, never a tombstone.
+ * Each changed snapshot is also emitted to the TRACES side output, stamped with its triggering Event's identity
+ * as the idempotency key, so the history topic gets only real changes — never the sweep's heard-but-unchanged
+ * republish, never a tombstone — and re-folding the same events yields the same traces.
  */
 public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOut> {
     static final long SWEEP_MS = 10_000;
@@ -46,7 +45,7 @@ public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOu
         }
         if (a.apply(m)) {
             out.collect(new StateOut(m.icao, a.snap));
-            ctx.output(TRACES, Trace.of(a.snap, UUID.randomUUID().toString()));
+            ctx.output(TRACES, Trace.of(a.snap, m.stationId, m.id, m.ts));
         }
         state.update(a);
     }

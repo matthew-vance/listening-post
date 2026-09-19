@@ -2,12 +2,12 @@ package history
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/matthew-vance/listening-post/internal/consume"
 	"github.com/matthew-vance/listening-post/internal/wire"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -49,39 +49,16 @@ type writer struct {
 	Config
 }
 
-// run consumes until ctx is cancelled, inserting a batch every flushRecords or flushAfter, whichever comes
-// first, and committing offsets only after the batch's rows are all in the table. As with the archiver, a poll
-// is uncommitted the moment it returns, so committing without its rows in the table would lose them for good.
-func (w *writer) run(ctx context.Context) error {
-	flushAfter := time.Duration(w.FlushSeconds) * time.Second
-	pending := make([]traceRow, 0, w.FlushRecords)
-	lastFlush := time.Now()
-	for {
-		pollCtx, cancel := context.WithDeadline(ctx, lastFlush.Add(flushAfter))
-		fetches := w.client.PollRecords(pollCtx, w.FlushRecords-len(pending))
-		cancel()
-		fetches.EachRecord(func(rec *kgo.Record) {
-			r, err := decodeTrace(rec.Value)
-			if err != nil {
-				w.logger.Error("skipping undecodable trace", "partition", rec.Partition, "offset", rec.Offset, "err", err)
-				return
-			}
-			pending = append(pending, r)
-		})
-		if ctx.Err() != nil {
-			return w.flush(pending)
-		}
-		if err := fetches.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("poll: %w", err)
-		}
+// decodeRecord adapts decodeTrace to consume.Batch's per-record signature.
+func decodeRecord(rec *kgo.Record) (traceRow, error) {
+	return decodeTrace(rec.Value)
+}
 
-		if len(pending) >= w.FlushRecords || time.Since(lastFlush) >= flushAfter {
-			if err := w.flush(pending); err != nil {
-				return err
-			}
-			pending, lastFlush = pending[:0], time.Now()
-		}
-	}
+// run consumes until ctx is cancelled, inserting a batch every flushRecords or flushAfter and committing offsets
+// only after the batch's rows are all in the table. A record that isn't a Trace is fatal: it propagates with the
+// offset uncommitted, so a contract break surfaces loudly instead of silently dropping history.
+func (w *writer) run(ctx context.Context) error {
+	return consume.Batch(ctx, w.client, w.FlushRecords, w.FlushSeconds, decodeRecord, w.flush)
 }
 
 // flush inserts rows, then commits their offsets. A crash between the two re-reads the batch, and the idempotency

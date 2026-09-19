@@ -55,7 +55,7 @@ Resilience is three layers, each for a distinct failure mode: the loops retry *i
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `INGEST_BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `PUBLISH_BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The server side is one Go binary (`main.go`, `internal/`) running the gateway, archiver, and history writer as goroutines in one container via `docker compose` (`just up`) behind Traefik, plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, so any Go loop can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The loops share one environment, so their variable names are disjoint.
+The server side is one Go binary (`main.go`, `internal/`) running the gateway, archiver, and history writer as goroutines in one container via `docker compose` (`just up`) behind Traefik, plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, so any Go loop can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. They share one environment, reading the variables each needs: `KAFKA_BROKERS` in all three, `DATABASE_URL` in the gateway and history writer, `ARCHIVE_DIR` in the archiver.
 
 The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
 
@@ -136,7 +136,7 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 
 ### History
 
-`internal/history/` consumes `aircraft.state_history` and inserts every Trace into the `aircraft_traces` hypertable in TimescaleDB, so flight paths can be drawn later with a plain SQL range scan. It commits Kafka offsets only after a batch's rows are in the table; the processor-minted `id` rides a `UNIQUE (id, last_seen)` constraint, so an at-least-once re-read after a crash is a no-op rather than a duplicate row. A batch is 1,000 rows or 5 seconds, whichever comes first.
+`internal/history/` consumes `aircraft.state_history` and inserts every Trace into the `aircraft_traces` hypertable in TimescaleDB, so flight paths can be drawn later with a plain SQL range scan. It commits Kafka offsets only after a batch's rows are in the table; each Trace carries its triggering Event's identity, which rides a `UNIQUE (event_station_id, event_id, event_ts, last_seen)` constraint, so an at-least-once re-read after a crash — or a re-fold of the same archive — is a no-op rather than a duplicate row. A batch is 1,000 rows or 5 seconds, whichever comes first.
 
 ```sql
 SELECT lat, lon, position_ts FROM aircraft_traces
@@ -195,7 +195,7 @@ The job runs in application mode: `flink-jobmanager` runs the one job baked into
 
 #### Traces
 
-Every time the fold *actually changes* a snapshot, it also writes a **Trace** to `aircraft.state_history` — the same snapshot stamped with a processor-minted UUID `id`. The sweep's heard-but-unchanged republish and tombstones stay on `aircraft.state` only, so the history topic carries just the aircraft's real changes, in order, keyed by ICAO. It is append-only (not compacted): it's the record flight paths are drawn from, and `aircraft.state`'s compaction is what makes it history-keeping by itself impossible.
+Every time the fold *actually changes* a snapshot, it also writes a **Trace** to `aircraft.state_history` — the same snapshot stamped with the identity of the raw Event that triggered it (`event_station_id`, `event_id`, `event_ts`), so a re-fold of the same events produces the same traces. The sweep's heard-but-unchanged republish and tombstones stay on `aircraft.state` only, so the history topic carries just the aircraft's real changes, in order, keyed by ICAO. It is append-only (not compacted): it's the record flight paths are drawn from, and `aircraft.state`'s compaction is what makes it history-keeping by itself impossible.
 
 #### Map
 

@@ -1,5 +1,7 @@
 {
-  "id": "9f8b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d",
+  "event_station_id": "s1",
+  "event_id": 42,
+  "event_ts": "2026-09-14T15:00:02Z",
   "icao": "A22123",
   "first_seen": "2026-09-14T15:00:00Z",
   "last_seen": "2026-09-14T15:00:02Z",

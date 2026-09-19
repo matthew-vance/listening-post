@@ -20,7 +20,8 @@ func TestRunPersistsTraces(t *testing.T) {
 	var records []*kgo.Record
 	for i := range 10 {
 		row := sampleRow()
-		row.ID = fmt.Sprintf("00000000-0000-0000-0000-%012d", i)
+		row.EventID = int64(i)
+		row.EventTS = row.EventTS.Add(time.Duration(i) * time.Second)
 		row.Icao = fmt.Sprintf("A%05d", i)
 		row.LastSeen = row.LastSeen.Add(time.Duration(i) * time.Second)
 		row.PositionTs = &row.LastSeen
@@ -68,5 +69,47 @@ func TestRunPersistsTraces(t *testing.T) {
 	}
 	if count != 10 {
 		t.Fatalf("rows = %d, want 10", count)
+	}
+}
+
+func TestRunFailsOnUndecodableTrace(t *testing.T) {
+	url := testDB(t)
+	topic := kafkatest.Topic(t)
+
+	row := sampleRow()
+	v, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kafkatest.Produce(t,
+		&kgo.Record{Topic: topic, Key: []byte(row.Icao), Value: v},
+		&kgo.Record{Topic: topic, Key: []byte("x"), Value: []byte("not a trace")},
+	)
+
+	cfg := Config{
+		KafkaBrokers: kafkatest.Brokers,
+		DatabaseURL:  url,
+		KafkaTopic:   topic,
+		Group:        "g_" + topic,
+		FlushRecords: 10,
+		FlushSeconds: 1,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	if err := Run(ctx, cfg, slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("Run returned nil, want an error for the undecodable trace")
+	}
+
+	pool, err := pgxpool.New(t.Context(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	var count int
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM aircraft_traces").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rows = %d, want 0 (no flush must run past a bad record)", count)
 	}
 }
