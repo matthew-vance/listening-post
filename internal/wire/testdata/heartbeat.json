@@ -1,0 +1,82 @@
+[
+  {
+    "name": "first tick: required fields and the buffer's oldest event only",
+    "inputs": {
+      "now": "2026-09-14T14:00:00+00:00",
+      "uptime": 100,
+      "disk_free": 1000,
+      "stats": {
+        "depth": 5,
+        "oldest_ts": "2026-09-14T13:59:00+00:00",
+        "seq": 14
+      },
+      "prev": null
+    },
+    "body": {
+      "reported_at": "2026-09-14T14:00:00+00:00",
+      "uptime_seconds": 100,
+      "disk_free_bytes": 1000,
+      "buffer_depth": 5,
+      "oldest_buffered_ts": "2026-09-14T13:59:00+00:00"
+    }
+  },
+  {
+    "name": "second tick: rate and activity",
+    "inputs": {
+      "now": "2026-09-14T14:01:00+00:00",
+      "uptime": 160,
+      "disk_free": 900,
+      "stats": {
+        "depth": 3,
+        "oldest_ts": "2026-09-14T14:00:30+00:00",
+        "seq": 70
+      },
+      "prev": {
+        "at": "2026-09-14T14:00:00+00:00",
+        "seq": 10,
+        "depth": 5,
+        "last_event_at": null,
+        "last_publish_at": null
+      }
+    },
+    "body": {
+      "reported_at": "2026-09-14T14:01:00+00:00",
+      "uptime_seconds": 160,
+      "disk_free_bytes": 900,
+      "buffer_depth": 3,
+      "oldest_buffered_ts": "2026-09-14T14:00:30+00:00",
+      "event_rate": 1.0,
+      "last_event_ts": "2026-09-14T14:01:00+00:00",
+      "last_publish_ts": "2026-09-14T14:01:00+00:00"
+    }
+  },
+  {
+    "name": "idle tick: empty buffer, last fields carried forward",
+    "inputs": {
+      "now": "2026-09-14T14:01:00+00:00",
+      "uptime": 160,
+      "disk_free": 900,
+      "stats": {
+        "depth": 0,
+        "oldest_ts": null,
+        "seq": 70
+      },
+      "prev": {
+        "at": "2026-09-14T14:00:00+00:00",
+        "seq": 70,
+        "depth": 0,
+        "last_event_at": "2026-09-14T13:55:00+00:00",
+        "last_publish_at": "2026-09-14T13:55:00+00:00"
+      }
+    },
+    "body": {
+      "reported_at": "2026-09-14T14:01:00+00:00",
+      "uptime_seconds": 160,
+      "disk_free_bytes": 900,
+      "buffer_depth": 0,
+      "event_rate": 0.0,
+      "last_event_ts": "2026-09-14T13:55:00+00:00",
+      "last_publish_ts": "2026-09-14T13:55:00+00:00"
+    }
+  }
+]
