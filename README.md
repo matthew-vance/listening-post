@@ -35,8 +35,8 @@ dump1090 and the `station` package run on the Pi:
 
 - **dump1090** ([flightaware/dump1090](https://github.com/flightaware/dump1090)) — reads the SDR dongle, decodes ADS-B, and serves SBS-1 text on TCP port 30003. Not part of this repo; install from the FlightAware packages (or `brew install dump1090-mutability`/`dump1090` locally). `just dump1090` starts it with the right flags: networking on, bound to localhost, CRC error correction, and `TZ=UTC` so its timestamps agree with ingest's.
 - **station** (`station/`, Python stdlib) — `python3 -m station` starts the three loops below as child processes and restarts any that exit, so there is one directory to copy and one process to manage. Each child is its own process: it keeps its own SQLite connection, and a crash in one doesn't stop the others.
-  - **ingest** — connects to dump1090 and appends every raw line to a SQLite table with a timestamp. Reconnects if dump1090 restarts.
-  - **publish** — reads batches from that table, POSTs them to the gateway, and deletes rows only after a 2xx. Retries while the gateway is unreachable.
+  - **ingest** — connects to dump1090 and appends every raw line to a SQLite table with a timestamp (the buffer drops blank lines, which the feed emits around a reconnect). Reconnects if dump1090 restarts.
+  - **publish** — reads batches from that table, POSTs them to the gateway, and deletes rows only after a 2xx. Retries the same batch after any failure, logging the gateway's reply.
   - **heartbeat** — every `INTERVAL_SECONDS`, reads the buffer (read-only) and the OS and POSTs a status report: uptime, free disk, buffer depth, event rate, last event/publish times. Independent of ingest and publish so it keeps reporting when they don't.
 
 The SQLite file is the buffer between the two: it survives Pi reboots and gateway outages, so the pipeline never loses data as long as the Pi has disk. `station/buffer.py` is the only module that knows its schema — the supervisor creates it, ingest appends, publish drains from the head, heartbeat samples it read-only — so the loops hold no SQL. Requirements on the Pi are just Python ≥ 3.11 and dump1090 — no packages to install. Deploying is `scp -r station/ pi:~/` and one systemd unit:
@@ -176,7 +176,7 @@ The job runs in application mode: `flink-jobmanager` runs the one job baked into
 
 #### Map
 
-`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` inside the compose container, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old.
+`just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` in a throwaway Kafka container on the compose network, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old.
 
 ### Kafka
 
@@ -230,7 +230,7 @@ Batching keeps SD card writes down; on power loss at most one batch is lost. A n
 | `POLL_SECONDS`       | `2`     | Sleep when the buffer is empty |
 | `RETRY_SECONDS`      | `5`     | Sleep after a failed POST      |
 
-Rows are deleted from the buffer only after the gateway returns 2xx, so delivery is at-least-once: a crash between the response and the delete re-sends that batch. The station (resolved from the token) plus `id` identifies an event uniquely across re-sends.
+Rows are deleted from the buffer only after the gateway returns 2xx, so delivery is at-least-once: a crash between the response and the delete re-sends that batch. The station (resolved from the token) plus `id` identifies an event uniquely across re-sends. Every failed POST is retried after `RETRY_SECONDS` with the gateway's reply in the log — a 4xx included, since it means the two sides disagree on the contract and the data should wait in the buffer rather than be dropped; `buffer_depth` climbing in the heartbeats is the alarm. The buffer only accepts rows the gateway will (non-blank `raw`), so publish trusts what it reads.
 
 ### Heartbeat
 
