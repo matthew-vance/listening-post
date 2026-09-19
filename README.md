@@ -57,7 +57,7 @@ The server side is one Go binary (`main.go`, `internal/`) running the gateway an
 
 The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
 
-Traefik is there to terminate TLS. The Let's Encrypt configuration is present in `compose.yaml` but commented out until there is a real hostname. **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
+Traefik is there to terminate TLS once there is a real hostname (add a `websecure` entrypoint and an ACME resolver to `compose.yaml`). **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
 
 ### Registering a station
 
@@ -118,7 +118,7 @@ The goose CLI is pinned in `go.mod` via the `tool` directive, so `go tool goose`
 archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 ```
 
-- `dt` is the event date (`ts`, UTC), so a station's late backlog lands in the right day. Files are named by Kafka partition and offset range, so re-processing after a crash regenerates the same files instead of duplicating rows. Offsets are committed only after a batch's files are renamed into place.
+- `dt` is the event date (`ts`, UTC), so a station's late backlog lands in the right day. Files are named by Kafka partition and offset range, so re-processing after a crash regenerates the same files instead of duplicating rows. Offsets are committed only after a batch's files are renamed into place. A batch is 10,000 records or 5 minutes, whichever comes first.
 - Columns: `station_id, id, ts, raw, received_at, kafka_partition, kafka_offset, kafka_timestamp`. Undecodable records are kept under `dt=unknown/station=unknown` with their bytes in `raw`.
 - Query it in place:
   ```sql
@@ -129,8 +129,6 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 |-----------------|--------------|----------------------------------------------------|
 | `KAFKA_BROKERS` | *(required)* | Comma-separated bootstrap brokers                  |
 | `ARCHIVE_DIR`   | *(required)* | Root directory for Parquet files                   |
-| `FLUSH_RECORDS` | `10000`      | Write a batch after this many records              |
-| `FLUSH_SECONDS` | `300`        | …or after this long since the last write           |
 
 `just up` creates `archive/` world-writable because the container runs as `nonroot` against a bind mount; revisit when storage moves to S3.
 

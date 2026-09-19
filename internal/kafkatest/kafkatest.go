@@ -83,23 +83,6 @@ func Start(ctx context.Context) (testcontainers.Container, error) {
 // Topic creates a uniquely named single-partition topic (auto-create is off, as in production) and returns its name.
 func Topic(t *testing.T) string {
 	t.Helper()
-	return TopicN(t, 1)
-}
-
-func TopicN(t *testing.T, partitions int32) string {
-	t.Helper()
-	return createTopic(t, partitions, nil)
-}
-
-// Compacted creates a topic with cleanup.policy=compact, as aircraft.state is declared in production.
-func Compacted(t *testing.T, partitions int32) string {
-	t.Helper()
-	compact := "compact"
-	return createTopic(t, partitions, map[string]*string{"cleanup.policy": &compact})
-}
-
-func createTopic(t *testing.T, partitions int32, configs map[string]*string) string {
-	t.Helper()
 	if testing.Short() {
 		t.Skip("needs docker")
 	}
@@ -109,7 +92,7 @@ func createTopic(t *testing.T, partitions int32, configs map[string]*string) str
 	}
 	defer client.Close()
 	name := fmt.Sprintf("t_%d", time.Now().UnixNano())
-	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), partitions, 1, configs, name); err != nil {
+	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), 1, 1, nil, name); err != nil {
 		t.Fatal(err)
 	}
 	return name
@@ -131,29 +114,23 @@ func Produce(t *testing.T, records ...*kgo.Record) {
 // Consume reads n records from the start of a topic.
 func Consume(t *testing.T, topic string, n int) []*kgo.Record {
 	t.Helper()
-	return ConsumeUpTo(t, topic, n, 10*time.Second)[:n]
-}
-
-// ConsumeUpTo reads up to n records from the start of a topic, returning what arrived within wait.
-func ConsumeUpTo(t *testing.T, topic string, n int, wait time.Duration) []*kgo.Record {
-	t.Helper()
 	client, err := kgo.NewClient(kgo.SeedBrokers(Brokers...), kgo.ConsumeTopics(topic), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), wait)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	var out []*kgo.Record
 	for len(out) < n {
 		fetches := client.PollFetches(ctx)
 		if ctx.Err() != nil {
-			break
+			t.Fatalf("got %d of %d records: %v", len(out), n, ctx.Err())
 		}
 		if err := fetches.Err(); err != nil {
 			t.Fatalf("after %d records: %v", len(out), err)
 		}
 		fetches.EachRecord(func(r *kgo.Record) { out = append(out, r) })
 	}
-	return out
+	return out[:n]
 }

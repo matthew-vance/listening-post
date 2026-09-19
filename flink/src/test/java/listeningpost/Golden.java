@@ -1,9 +1,10 @@
 package listeningpost;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -15,7 +16,7 @@ import java.util.Map;
 final class Golden {
     private Golden() {}
 
-    static JsonNode load(String name) throws Exception {
+    static JsonNode load(String name) throws IOException {
         try (InputStream in = Golden.class.getResourceAsStream("/" + name)) {
             if (in == null) {
                 throw new IllegalStateException(name + " not on the test classpath; is internal/wire/testdata a test resource?");
@@ -24,49 +25,27 @@ final class Golden {
         }
     }
 
-    static Object normalize(JsonNode node) throws Exception {
-        return normalize(Json.MAPPER.treeToValue(node, Object.class));
+    static Object normalize(JsonNode node) throws IOException {
+        return norm(Json.MAPPER.treeToValue(node, Object.class));
     }
 
-    static Object normalize(Object o) throws Exception {
-        if (o instanceof Map<?, ?> m) {
-            return normalize(Json.MAPPER.convertValue(m, new TypeReference<Map<String, Object>>() {}), true);
-        }
-        return norm(o);
+    /** A Java object as fixture-comparable JSON: serialize with the production mapper, then normalize. */
+    static Object json(Object o) throws IOException {
+        return norm(Json.MAPPER.readValue(Json.MAPPER.writeValueAsString(o), Object.class));
     }
 
-    private static Object normalize(Map<String, Object> m, boolean unused) throws Exception {
-        m.replaceAll((k, v) -> {
-            try {
-                return norm(v);
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        });
-        return m;
-    }
-
-    private static Object norm(Object v) throws Exception {
+    private static Object norm(Object v) {
         if (v instanceof Number n) {
             return n.doubleValue();
         }
         if (v instanceof List<?> l) {
-            return l.stream().map(x -> {
-                try {
-                    return norm(x);
-                } catch (Exception e) {
-                    throw new IllegalStateException(e);
-                }
-            }).toList();
+            return l.stream().map(Golden::norm).toList();
         }
         if (v instanceof Map<?, ?> m) {
-            return normalize(m);
+            Map<Object, Object> out = new LinkedHashMap<>();
+            m.forEach((k, x) -> out.put(k, norm(x)));
+            return out;
         }
         return v;
-    }
-
-    /** A Java object as fixture-comparable JSON: serialize with the production mapper, then normalize. */
-    static Object json(Object o) throws Exception {
-        return normalize(Json.MAPPER.readValue(Json.MAPPER.writeValueAsString(o), Object.class));
     }
 }

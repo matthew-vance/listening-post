@@ -11,11 +11,9 @@ import (
 )
 
 type archiver struct {
-	client       *kgo.Client
-	dir          string
-	logger       *slog.Logger
-	flushRecords int
-	flushAfter   time.Duration
+	client *kgo.Client
+	logger *slog.Logger
+	Config
 }
 
 // run consumes until ctx is cancelled, flushing a batch to Parquet every flushRecords or flushAfter, whichever
@@ -24,11 +22,12 @@ type archiver struct {
 // moment it returns, so committing without its rows on disk would lose them from the archive for good.
 // ponytail: single goroutine, one instance; add per-partition workers when ~33 rec/s becomes thousands.
 func (a *archiver) run(ctx context.Context) error {
-	pending := make([]row, 0, a.flushRecords)
+	flushAfter := time.Duration(a.FlushSeconds) * time.Second
+	pending := make([]row, 0, a.FlushRecords)
 	lastFlush := time.Now()
 	for {
-		pollCtx, cancel := context.WithDeadline(ctx, lastFlush.Add(a.flushAfter))
-		fetches := a.client.PollRecords(pollCtx, a.flushRecords-len(pending))
+		pollCtx, cancel := context.WithDeadline(ctx, lastFlush.Add(flushAfter))
+		fetches := a.client.PollRecords(pollCtx, a.FlushRecords-len(pending))
 		cancel()
 		fetches.EachRecord(func(rec *kgo.Record) {
 			r, err := decode(rec)
@@ -44,7 +43,7 @@ func (a *archiver) run(ctx context.Context) error {
 			return fmt.Errorf("poll: %w", err)
 		}
 
-		if len(pending) >= a.flushRecords || time.Since(lastFlush) >= a.flushAfter {
+		if len(pending) >= a.FlushRecords || time.Since(lastFlush) >= flushAfter {
 			if err := a.flush(pending); err != nil {
 				return err
 			}
@@ -60,7 +59,7 @@ func (a *archiver) flush(rows []row) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	files, err := groupAndWrite(a.dir, rows)
+	files, err := groupAndWrite(a.ArchiveDir, rows)
 	if err != nil {
 		return err
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -26,13 +25,7 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 	}
 	logger.Info("archiving", "topic", cfg.KafkaRaw, "group", cfg.ArchiverGroup, "dir", cfg.ArchiveDir, "flush_records", cfg.FlushRecords, "flush_seconds", cfg.FlushSeconds)
 
-	a := &archiver{
-		client:       client,
-		dir:          cfg.ArchiveDir,
-		logger:       logger,
-		flushRecords: cfg.FlushRecords,
-		flushAfter:   time.Duration(cfg.FlushSeconds) * time.Second,
-	}
+	a := &archiver{client: client, logger: logger, Config: cfg}
 	err = a.run(ctx)
 	logger.Info("shut down")
 	return err

@@ -9,18 +9,10 @@ services:
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --accesslog=true
-      # TLS — enable when deploying behind a real hostname:
-      # - --entrypoints.websecure.address=:443
-      # - --entrypoints.web.http.redirections.entrypoint.to=websecure
-      # - --certificatesresolvers.le.acme.email=you@example.com
-      # - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      # - --certificatesresolvers.le.acme.tlschallenge=true
     ports:
       - "80:80"
-      # - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # - ./letsencrypt:/letsencrypt
 
   postgres:
     image: postgres:18-alpine
@@ -56,7 +48,6 @@ services:
       traefik.enable: "true"
       traefik.http.routers.gateway.rule: PathPrefix(`/v1`)
       traefik.http.routers.gateway.entrypoints: web
-      # traefik.http.routers.gateway.tls.certresolver: le
       traefik.http.services.gateway.loadbalancer.server.port: "8080"
       traefik.http.services.gateway.loadbalancer.healthcheck.path: /readyz
       traefik.http.services.gateway.loadbalancer.healthcheck.port: "9091"

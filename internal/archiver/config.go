@@ -1,10 +1,7 @@
 package archiver
 
 import (
-	"cmp"
 	"errors"
-	"fmt"
-	"strconv"
 
 	"github.com/matthew-vance/listening-post/internal/wire"
 )
@@ -15,8 +12,8 @@ type Config struct {
 	KafkaRaw      string   // topic to archive
 	ArchiverGroup string   // consumer group
 	ArchiveDir    string   // ARCHIVE_DIR: root directory for Parquet files (required)
-	FlushRecords  int      // FLUSH_RECORDS: write a batch after this many records (default 10000)
-	FlushSeconds  int      // FLUSH_SECONDS: or after this long since the last write (default 300)
+	FlushRecords  int      // write a batch after this many records
+	FlushSeconds  int      // or after this long since the last write
 }
 
 // LoadConfig reads the archiver's settings from getenv, failing on missing required variables.
@@ -25,15 +22,10 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{KafkaBrokers: brokers, KafkaRaw: wire.RawTopic, ArchiverGroup: "archiver", ArchiveDir: getenv("ARCHIVE_DIR")}
+	// ponytail: flush thresholds are fixed; read them from env if a deployment ever needs to tune them.
+	cfg := Config{KafkaBrokers: brokers, KafkaRaw: wire.RawTopic, ArchiverGroup: "archiver", ArchiveDir: getenv("ARCHIVE_DIR"), FlushRecords: 10000, FlushSeconds: 300}
 	if cfg.ArchiveDir == "" {
 		return Config{}, errors.New("ARCHIVE_DIR is not set")
-	}
-	if cfg.FlushRecords, err = strconv.Atoi(cmp.Or(getenv("FLUSH_RECORDS"), "10000")); err != nil {
-		return Config{}, fmt.Errorf("FLUSH_RECORDS: %w", err)
-	}
-	if cfg.FlushSeconds, err = strconv.Atoi(cmp.Or(getenv("FLUSH_SECONDS"), "300")); err != nil {
-		return Config{}, fmt.Errorf("FLUSH_SECONDS: %w", err)
 	}
 	return cfg, nil
 }

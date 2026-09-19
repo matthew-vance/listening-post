@@ -1,6 +1,0 @@
-[project]
-name = "map"
-version = "0.1.0"
-description = "Dev-only map of aircraft.state"
-requires-python = ">=3.11"
-dependencies = []
