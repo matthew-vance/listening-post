@@ -39,9 +39,9 @@ type eventPublisher interface {
 	Publish(ctx context.Context, station string, receivedAt time.Time, events []event) error
 }
 
-func handleEventsPost(logger *slog.Logger, pub eventPublisher, ingest *pause.Gate) http.Handler {
+func handleEventsPost(logger *slog.Logger, pub eventPublisher, gate *pause.Gate) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ingest.Paused() {
+		if gate.Paused() {
 			fail(w, http.StatusServiceUnavailable, "ingest paused")
 			return
 		}
@@ -141,16 +141,16 @@ func handleHealthz() http.Handler {
 	})
 }
 
-// handlePauseToggle pauses or resumes a named target (ingest or the archiver) and logs the action. When ingest
-// is paused, POST /v1/events answers 503, so a station holds its batch and retries instead of publishing.
-func handlePauseToggle(logger *slog.Logger, gate *pause.Gate, target string, paused bool) http.Handler {
+// handlePauseToggle pauses or resumes the process-wide gate (ingest and the archiver) and logs the action. While
+// paused, POST /v1/events answers 503, so a station holds its batch and retries instead of publishing.
+func handlePauseToggle(logger *slog.Logger, gate *pause.Gate, paused bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if paused {
 			gate.Pause()
-			logger.Info("paused", "target", target)
+			logger.Info("paused")
 		} else {
 			gate.Resume()
-			logger.Info("resumed", "target", target)
+			logger.Info("resumed")
 		}
 		encode(w, http.StatusOK, map[string]bool{"paused": paused})
 	})

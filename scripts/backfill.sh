@@ -17,11 +17,9 @@ fi
 echo "== pausing ingest and the archiver =="
 # The gateway keeps serving heartbeats/readyz; the events endpoint answers 503 (stations buffer) and the
 # archiver's consumer closes, so it won't re-archive the replay.
-pause() { curl -sf -X POST "http://localhost:9091/$1" >/dev/null; }
-pause ingest/pause
-pause archiver/pause
-trap 'curl -sf -X POST http://localhost:9091/ingest/resume >/dev/null; curl -sf -X POST http://localhost:9091/archiver/resume >/dev/null' EXIT
-sleep 2 # let the archiver's poll tick and close its consumer before events.raw is wiped
+admin() { curl -sf -X POST "http://localhost:9091/$1" >/dev/null; }
+admin pause
+trap 'admin resume' EXIT
 
 echo "== stopping the processor =="
 docker compose stop flink-jobmanager flink-taskmanager >/dev/null
@@ -50,7 +48,7 @@ echo "== clearing checkpoint =="
 docker run --rm -v listening-post_flink-checkpoints:/data flink:2.2.1-java17 sh -c 'rm -rf /data/*' >/dev/null
 
 echo "== replaying archive =="
-go run ./cmd/backfill
+KAFKA_BROKERS=localhost:9094 go run ./cmd/backfill
 
 echo "== restarting the processor =="
 docker compose up -d flink-jobmanager flink-taskmanager >/dev/null
@@ -79,11 +77,8 @@ echo "== pointing the archiver at the tail =="
 docker compose exec -T kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
   --reset-offsets --group archiver --topic events.raw --to-latest --execute >/dev/null
 
-echo "== resuming the archiver =="
-curl -sf -X POST http://localhost:9091/archiver/resume >/dev/null
-
-echo "== resuming ingest =="
-curl -sf -X POST http://localhost:9091/ingest/resume >/dev/null
+echo "== resuming ingest and the archiver =="
+admin resume
 
 echo "== waiting for the history writer to drain =="
 wait_lag history 10

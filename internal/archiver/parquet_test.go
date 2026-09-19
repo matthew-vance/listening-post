@@ -15,7 +15,7 @@ var (
 )
 
 func TestWriteParquetRoundTrips(t *testing.T) {
-	rows := []row{
+	rows := []Row{
 		{StationID: station, ID: 1, TS: t0, Raw: "MSG,3,a", ReceivedAt: t0.Add(time.Second), KafkaPartition: 1, KafkaOffset: 10, KafkaTimestamp: t0.Add(2 * time.Second)},
 		{StationID: station, ID: 2, TS: t0.Add(time.Millisecond), Raw: "MSG,4,b", ReceivedAt: t0.Add(time.Second), KafkaPartition: 1, KafkaOffset: 11, KafkaTimestamp: t0.Add(2 * time.Second)},
 	}
@@ -24,7 +24,7 @@ func TestWriteParquetRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := parquet.Read[row](bytes.NewReader(data), int64(len(data)))
+	got, err := parquet.Read[Row](bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestWriteParquetRoundTrips(t *testing.T) {
 		if got[i].StationID != rows[i].StationID || got[i].ID != rows[i].ID || !got[i].TS.Equal(rows[i].TS) ||
 			got[i].Raw != rows[i].Raw || !got[i].ReceivedAt.Equal(rows[i].ReceivedAt) ||
 			got[i].KafkaPartition != rows[i].KafkaPartition || got[i].KafkaOffset != rows[i].KafkaOffset || !got[i].KafkaTimestamp.Equal(rows[i].KafkaTimestamp) {
-			t.Fatalf("row %d = %+v, want %+v", i, got[i], rows[i])
+			t.Fatalf("Row %d = %+v, want %+v", i, got[i], rows[i])
 		}
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/matthew-vance/listening-post/internal/consume"
-	"github.com/matthew-vance/listening-post/internal/pause"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -20,13 +19,13 @@ type archiver struct {
 // run consumes until ctx is cancelled, flushing a batch to Parquet every flushRecords or flushAfter, whichever
 // comes first, and committing offsets only after the batch's files are all in place. A final flush runs on exit.
 // ponytail: single goroutine, one instance; add per-partition workers when ~33 rec/s becomes thousands.
-func (a *archiver) run(ctx context.Context, gate *pause.Gate) error {
-	return consume.Batch(ctx, a.client, a.FlushRecords, a.FlushSeconds, a.decode, a.flush, gate.Paused)
+func (a *archiver) run(ctx context.Context) error {
+	return consume.Batch(ctx, a.client, a.FlushRecords, a.FlushSeconds, a.decode, a.flush)
 }
 
 // decode turns every record into a row — an undecodable one keeps its bytes in raw (sushi principle) — so the
 // decode error is advisory: logged, never fatal, because the archive keeps what it can't parse.
-func (a *archiver) decode(rec *kgo.Record) (row, error) {
+func (a *archiver) decode(rec *kgo.Record) (Row, error) {
 	r, err := decodeRow(rec)
 	if err != nil {
 		a.logger.Error("archiving undecodable record", "partition", rec.Partition, "offset", rec.Offset, "err", err)
@@ -37,7 +36,7 @@ func (a *archiver) decode(rec *kgo.Record) (row, error) {
 // flush writes rows to Parquet, then commits their offsets. The commit uses a fresh context: on shutdown ctx is
 // already cancelled and the files are written; losing the commit would only mean re-archiving (idempotent), but
 // there's no reason to.
-func (a *archiver) flush(rows []row) error {
+func (a *archiver) flush(rows []Row) error {
 	if len(rows) == 0 {
 		return nil
 	}

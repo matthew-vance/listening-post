@@ -13,9 +13,9 @@ import (
 	"github.com/matthew-vance/listening-post/internal/wire"
 )
 
-// Run starts the gateway and blocks until ctx is cancelled. archiverGate is the pause gate for the archiver
-// (owned by main, shared with the archiver service); the admin server toggles it, the archiver's loop honours it.
-func Run(ctx context.Context, cfg Config, logger *slog.Logger, archiverGate *pause.Gate) error {
+// Run starts the gateway and blocks until ctx is cancelled. gate is the process-wide pause switch main shares with
+// the archiver: the admin server toggles it, the events endpoint and the archiver's loop honour it.
+func Run(ctx context.Context, cfg Config, logger *slog.Logger, gate *pause.Gate) error {
 	pool, err := openDB(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -34,10 +34,9 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger, archiverGate *pau
 	checks := map[string]func(context.Context) error{"database": pool.Ping, "kafka": kafka.Ping}
 
 	r := &readiness{}
-	ingest := pause.New()
 	// ReadHeaderTimeout bounds how long a client can dribble headers before it costs us a goroutine.
-	public := &http.Server{Addr: ":" + cfg.Port, Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool}, pub, ingest), ReadHeaderTimeout: 10 * time.Second}
-	admin := &http.Server{Addr: ":" + cfg.AdminPort, Handler: newAdminServer(r, logger, ingest, archiverGate, checks), ReadHeaderTimeout: 10 * time.Second}
+	public := &http.Server{Addr: ":" + cfg.Port, Handler: newServer(logger, &stationStore{pool: pool}, &heartbeatStore{pool: pool}, pub, gate), ReadHeaderTimeout: 10 * time.Second}
+	admin := &http.Server{Addr: ":" + cfg.AdminPort, Handler: newAdminServer(r, logger, gate, checks), ReadHeaderTimeout: 10 * time.Second}
 
 	// Bind synchronously so a taken port fails run() outright and ready is only set once both listeners exist.
 	errc := make(chan error, 2)

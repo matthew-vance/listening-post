@@ -6,6 +6,7 @@ package wire
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -48,4 +49,14 @@ type Event struct {
 	TS         time.Time `json:"ts"`
 	Raw        string    `json:"raw"`
 	ReceivedAt time.Time `json:"received_at"`
+}
+
+// Record encodes an Event as a record for the raw topic, keyed by station so a station's events stay ordered
+// within a partition. The gateway and the backfill both produce through it, so the framing is defined once.
+func Record(topic string, e Event) (*kgo.Record, error) {
+	value, err := json.Marshal(e)
+	if err != nil {
+		return nil, fmt.Errorf("encode event %s/%d: %w", e.StationID, e.ID, err)
+	}
+	return &kgo.Record{Topic: topic, Key: []byte(e.StationID), Value: value}, nil
 }

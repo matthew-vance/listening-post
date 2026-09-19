@@ -13,7 +13,7 @@ func TestGroupAndWrite(t *testing.T) {
 	dir := t.TempDir()
 	other := "8ee63520-fa04-424f-b05a-60065c207863"
 	day2 := t0.Add(24 * time.Hour)
-	rows := []row{
+	rows := []Row{
 		{StationID: station, ID: 1, TS: t0, KafkaPartition: 1, KafkaOffset: 100},
 		{StationID: other, ID: 1, TS: t0, KafkaPartition: 2, KafkaOffset: 7},
 		{StationID: station, ID: 2, TS: t0.Add(time.Minute), KafkaPartition: 1, KafkaOffset: 101},
@@ -36,7 +36,7 @@ func TestGroupAndWrite(t *testing.T) {
 		t.Fatalf("files = %v, want %v", files, want)
 	}
 
-	got, err := parquet.ReadFile[row](filepath.Join(dir, want[0]))
+	got, err := parquet.ReadFile[Row](filepath.Join(dir, want[0]))
 	if err != nil {
 		t.Fatal(err)
 	}

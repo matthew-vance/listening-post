@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -22,11 +21,11 @@ type kafkaPublisher struct {
 func (p *kafkaPublisher) Publish(ctx context.Context, station string, receivedAt time.Time, events []event) error {
 	records := make([]*kgo.Record, 0, len(events))
 	for _, e := range events {
-		value, err := json.Marshal(wire.Event{StationID: station, ID: e.ID, TS: e.TS, Raw: e.Raw, ReceivedAt: receivedAt})
+		rec, err := wire.Record(p.topic, wire.Event{StationID: station, ID: e.ID, TS: e.TS, Raw: e.Raw, ReceivedAt: receivedAt})
 		if err != nil {
-			return fmt.Errorf("encode event %d: %w", e.ID, err)
+			return err
 		}
-		records = append(records, &kgo.Record{Topic: p.topic, Key: []byte(station), Value: value})
+		records = append(records, rec)
 	}
 	if err := p.client.ProduceSync(ctx, records...).FirstErr(); err != nil {
 		return fmt.Errorf("produce to %s: %w", p.topic, err)

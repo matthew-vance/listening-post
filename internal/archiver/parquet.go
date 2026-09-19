@@ -12,8 +12,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// row is the Parquet schema: flat and explicit, since it's the contract with DuckDB/pyarrow readers.
-type row struct {
+// Row is the Parquet schema: flat and explicit, since it's the contract with DuckDB/pyarrow readers and with
+// cmd/backfill, which reads the archive back.
+type Row struct {
 	StationID      string    `parquet:"station_id"`
 	ID             int64     `parquet:"id"`
 	TS             time.Time `parquet:"ts,timestamp(microsecond)"`
@@ -24,11 +25,11 @@ type row struct {
 	KafkaTimestamp time.Time `parquet:"kafka_timestamp,timestamp(microsecond)"`
 }
 
-// decodeRow turns a topic record into a row. A value that isn't a gateway event is still archived — sushi
+// decodeRow turns a topic record into a Row. A value that isn't a gateway event is still archived — sushi
 // principle — with its bytes in raw and zeroed fields, which routes it to the dt=unknown/station=unknown
 // partition; the returned error says why.
-func decodeRow(rec *kgo.Record) (row, error) {
-	r := row{KafkaPartition: rec.Partition, KafkaOffset: rec.Offset, KafkaTimestamp: rec.Timestamp}
+func decodeRow(rec *kgo.Record) (Row, error) {
+	r := Row{KafkaPartition: rec.Partition, KafkaOffset: rec.Offset, KafkaTimestamp: rec.Timestamp}
 	var e wire.Event
 	err := json.Unmarshal(rec.Value, &e)
 	if err == nil && (e.StationID == "" || e.TS.IsZero()) {
@@ -42,17 +43,17 @@ func decodeRow(rec *kgo.Record) (row, error) {
 	return r, nil
 }
 
-// partition is the Hive-style directory for a row, keyed on event date so late backlogs land in the right day.
-func (r row) partition() string {
+// partition is the Hive-style directory for a Row, keyed on event date so late backlogs land in the right day.
+func (r Row) partition() string {
 	if r.StationID == "" || r.TS.IsZero() {
 		return "dt=unknown/station=unknown"
 	}
 	return fmt.Sprintf("dt=%s/station=%s", r.TS.UTC().Format("2006-01-02"), r.StationID)
 }
 
-func writeParquet(rows []row) ([]byte, error) {
+func writeParquet(rows []Row) ([]byte, error) {
 	var buf bytes.Buffer
-	w := parquet.NewGenericWriter[row](&buf)
+	w := parquet.NewGenericWriter[Row](&buf)
 	if _, err := w.Write(rows); err != nil {
 		return nil, fmt.Errorf("write rows: %w", err)
 	}

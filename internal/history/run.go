@@ -49,16 +49,11 @@ type writer struct {
 	Config
 }
 
-// decodeRecord adapts decodeTrace to consume.Batch's per-record signature.
-func decodeRecord(rec *kgo.Record) (traceRow, error) {
-	return decodeTrace(rec.Value)
-}
-
 // run consumes until ctx is cancelled, inserting a batch every flushRecords or flushAfter and committing offsets
 // only after the batch's rows are all in the table. A record that isn't a Trace is fatal: it propagates with the
 // offset uncommitted, so a contract break surfaces loudly instead of silently dropping history.
 func (w *writer) run(ctx context.Context) error {
-	return consume.Batch(ctx, w.client, w.FlushRecords, w.FlushSeconds, decodeRecord, w.flush, nil)
+	return consume.Batch(ctx, w.client, w.FlushRecords, w.FlushSeconds, func(rec *kgo.Record) (traceRow, error) { return decodeTrace(rec.Value) }, w.flush)
 }
 
 // flush inserts rows, then commits their offsets. A crash between the two re-reads the batch, and the idempotency

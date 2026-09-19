@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"golang.org/x/sync/errgroup"
@@ -33,37 +32,26 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	archiverGate := pause.New()
-	if err := run(ctx, logger, selectedServices(archiverGate)); err != nil {
+	if err := run(ctx, logger, services(pause.New())); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-// selectedServices returns the services this process runs: all of them, unless SERVICES names a subset (a
-// comma-separated list). The archiver's pause gate is shared with the gateway so its admin server can pause the
-// archiver in-process — that's how the backfill stops the archiver without a separate container.
-func selectedServices(archiverGate *pause.Gate) map[string]service {
-	all := map[string]service{
+// services run together in one process, connected through Kafka rather than each other. Each Run documents its
+// own environment; the names are disjoint so they can share one. The processor is a Flink job (flink/), not here.
+// The gateway and archiver share one pause gate so the admin server can pause ingest and archiving in-process —
+// that's how the backfill stops them without a separate container.
+func services(gate *pause.Gate) map[string]service {
+	return map[string]service{
 		"gateway": svc(gateway.LoadConfig, func(ctx context.Context, cfg gateway.Config, logger *slog.Logger) error {
-			return gateway.Run(ctx, cfg, logger, archiverGate)
+			return gateway.Run(ctx, cfg, logger, gate)
 		}),
 		"archiver": svc(archiver.LoadConfig, func(ctx context.Context, cfg archiver.Config, logger *slog.Logger) error {
-			return archiver.Run(ctx, cfg, logger, archiverGate)
+			return archiver.Run(ctx, cfg, logger, gate)
 		}),
 		"history": svc(history.LoadConfig, history.Run),
 	}
-	v := os.Getenv("SERVICES")
-	if v == "" {
-		return all
-	}
-	out := make(map[string]service, len(all))
-	for _, name := range strings.Split(v, ",") {
-		if svc, ok := all[name]; ok {
-			out[name] = svc
-		}
-	}
-	return out
 }
 
 // run starts every service and blocks until all have returned. The first to return, with an error or on ctx

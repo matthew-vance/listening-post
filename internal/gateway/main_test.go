@@ -176,7 +176,7 @@ func TestBearerAuth(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newAdminServer(&readiness{}, slog.New(slog.DiscardHandler), pause.New(), pause.New(), allOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newAdminServer(&readiness{}, slog.New(slog.DiscardHandler), pause.New(), allOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -211,7 +211,7 @@ func TestReadyz(t *testing.T) {
 			r.ready.Store(tt.ready)
 
 			rec := httptest.NewRecorder()
-			newAdminServer(r, slog.New(slog.DiscardHandler), pause.New(), pause.New(), tt.checks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			newAdminServer(r, slog.New(slog.DiscardHandler), pause.New(), tt.checks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -274,20 +274,20 @@ func TestIngestPause(t *testing.T) {
 	published := 0
 	capture := publisherFunc(func(context.Context, string, time.Time, []event) error { published++; return nil })
 	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture, gate)
-	admin := newAdminServer(&readiness{}, slog.New(slog.DiscardHandler), gate, pause.New(), allOK)
+	admin := newAdminServer(&readiness{}, slog.New(slog.DiscardHandler), gate, allOK)
 
 	// events flow while ingest is live
 	wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusOK)
 
 	// pausing via the admin endpoint refuses events so a station buffers and retries
 	rec := httptest.NewRecorder()
-	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/ingest/pause", nil))
+	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/pause", nil))
 	wantStatus(t, rec, http.StatusOK)
 	wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusServiceUnavailable)
 
 	// resuming lets them through again
 	rec = httptest.NewRecorder()
-	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/ingest/resume", nil))
+	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/resume", nil))
 	wantStatus(t, rec, http.StatusOK)
 	wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusOK)
 

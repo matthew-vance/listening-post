@@ -48,7 +48,7 @@ func TestRunArchivesTopic(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), pause.New()) }()
-	var rows []row
+	var rows []Row
 	for deadline := time.Now().Add(20 * time.Second); len(rows) < 25 && time.Now().Before(deadline); {
 		time.Sleep(200 * time.Millisecond)
 		rows = readArchive(t, dir)
@@ -86,14 +86,14 @@ func TestRunArchivesTopic(t *testing.T) {
 	}
 }
 
-func readArchive(t *testing.T, dir string) []row {
+func readArchive(t *testing.T, dir string) []Row {
 	t.Helper()
-	var rows []row
+	var rows []Row
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".parquet") {
 			return nil
 		}
-		got, err := parquet.ReadFile[row](path)
+		got, err := parquet.ReadFile[Row](path)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
