@@ -27,7 +27,6 @@ func newAircraft(icao string) *aircraft {
 // still lands the fields the newer one lacked.
 func (a *aircraft) apply(m wire.Decoded) bool {
 	s := &a.snap
-	a.dirty = true
 	if s.FirstSeen.IsZero() || m.TS.Before(s.FirstSeen) {
 		s.FirstSeen = m.TS
 	}
@@ -64,6 +63,7 @@ func (a *aircraft) apply(m wire.Decoded) bool {
 	set("on_ground", m.OnGround != nil, !eq(s.OnGround, m.OnGround), func() { s.OnGround = m.OnGround })
 	hasPosition := m.Lat != nil && m.Lon != nil
 	set("position_ts", hasPosition, !m.TS.Equal(s.PositionTS), func() { s.PositionTS = m.TS })
+	a.dirty = !changed // heard: a changed snapshot goes out now, an unchanged one is owed on the next sweep
 	return changed
 }
 
@@ -105,7 +105,14 @@ type stateOut struct {
 func (s *state) fold(batch []decodedIn, now time.Time) []stateOut {
 	var out []stateOut
 	for _, m := range batch {
-		if snap, changed := s.apply(m.Decoded, m.partition); changed {
+		a, ok := s.aircraft[m.ICAO]
+		if !ok {
+			a = newAircraft(m.ICAO)
+			s.aircraft[m.ICAO] = a
+		}
+		a.partition = m.partition
+		if a.apply(m.Decoded) {
+			snap := a.snap
 			out = append(out, stateOut{icao: snap.ICAO, partition: m.partition, snap: &snap})
 		}
 	}
@@ -134,22 +141,6 @@ func (s *state) untilSweep(now time.Time) time.Duration {
 		return sweepEvery
 	}
 	return sweepEvery - now.Sub(s.lastSweep)
-}
-
-// apply routes a message to its aircraft, creating it on first sight, and returns the snapshot if it changed;
-// a changed snapshot is published by fold, so the aircraft is no longer owed one.
-func (s *state) apply(m wire.Decoded, partition int32) (wire.Snapshot, bool) {
-	a, ok := s.aircraft[m.ICAO]
-	if !ok {
-		a = newAircraft(m.ICAO)
-		s.aircraft[m.ICAO] = a
-	}
-	a.partition = partition
-	changed := a.apply(m)
-	if changed {
-		a.dirty = false
-	}
-	return a.snap, changed
 }
 
 // forget drops one aircraft: a tombstone seen while warming up.

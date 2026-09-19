@@ -91,17 +91,18 @@ func TestMergeGolden(t *testing.T) {
 		t.Run(sc.Name, func(t *testing.T) {
 			s := newState(time.Hour)
 			for i, st := range sc.Steps {
-				snap, changed := s.apply(msg(st.Station, st.TS, st.Raw), 0)
+				// one message per fold at a fixed clock: never a sweep, so the output is exactly the merge's verdict
+				out := s.fold([]decodedIn{{Decoded: msg(st.Station, st.TS, st.Raw)}}, base)
 				if st.Emit == nil {
-					if changed {
-						t.Fatalf("step %d: emitted %+v, want nothing", i, asJSON(t, snap))
+					if len(out) != 0 {
+						t.Fatalf("step %d: emitted %+v, want nothing", i, asJSON(t, out[0].snap))
 					}
 					continue
 				}
-				if !changed {
-					t.Fatalf("step %d: emitted nothing, want %v", i, st.Emit)
+				if len(out) != 1 {
+					t.Fatalf("step %d: emitted %d records, want the snapshot %v", i, len(out), st.Emit)
 				}
-				if got := asJSON(t, snap); !reflect.DeepEqual(got, st.Emit) {
+				if got := asJSON(t, out[0].snap); !reflect.DeepEqual(got, st.Emit) {
 					g, _ := json.Marshal(got)
 					w, _ := json.Marshal(st.Emit)
 					t.Fatalf("step %d:\n got %s\nwant %s", i, g, w)

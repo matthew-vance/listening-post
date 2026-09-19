@@ -31,7 +31,6 @@ public class Aircraft {
      */
     public boolean apply(Decoded m) {
         Snapshot s = snap;
-        dirty = true;
         if (s.firstSeen == null || m.ts.isBefore(s.firstSeen)) {
             s.firstSeen = m.ts;
         }
@@ -62,6 +61,7 @@ public class Aircraft {
         changed |= set(ON_GROUND, ts, m.onGround, s.onGround, v -> s.onGround = v);
         boolean hasPosition = m.lat != null && m.lon != null;
         changed |= set(POSITION_TS, ts, hasPosition ? m.ts : null, s.positionTs, v -> s.positionTs = v);
+        dirty = !changed; // heard: a changed snapshot goes out now, an unchanged one is owed on the next sweep
         return changed;
     }
 

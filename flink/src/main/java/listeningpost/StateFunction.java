@@ -37,7 +37,6 @@ public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOu
             ctx.timerService().registerProcessingTimeTimer(ctx.timerService().currentProcessingTime() + SWEEP_MS);
         }
         if (a.apply(m)) {
-            a.dirty = false; // this snapshot is going out now
             out.collect(new StateOut(m.icao, a.snap));
         }
         state.update(a);

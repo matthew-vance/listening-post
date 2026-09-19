@@ -113,8 +113,7 @@ func TestUntilSweepAnchorsToTheLastSweep(t *testing.T) {
 
 func TestDropPartitions(t *testing.T) {
 	s := newState(5 * time.Minute)
-	s.apply(msg("s1", base, position), 0)
-	s.apply(msg("s1", base, "MSG,3,1,1,ABCDEF,1,2026/09/14,16:05:24.167,2026/09/14,16:05:24.173,,1000,,,40.0,-83.0,,,0,,0,0"), 1)
+	s.fold([]decodedIn{in("s1", base, position, 0), in("s1", base, other, 1)}, base)
 
 	s.drop([]int32{1})
 	if _, ok := s.aircraft["ABCDEF"]; ok {
