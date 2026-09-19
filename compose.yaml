@@ -33,6 +33,8 @@ services:
       timeout: 3s
       retries: 10
 
+  # One Go binary running the gateway, archiver, and history writer in one container. The backfill pauses ingest
+  # and the archiver in-process via the admin endpoint rather than stopping containers.
   server:
     build: .
     restart: unless-stopped
@@ -42,6 +44,8 @@ services:
       ARCHIVE_DIR: /archive
     volumes:
       - ./archive:/archive # bind mount so DuckDB and notebooks read it from the host
+    ports:
+      - "127.0.0.1:9091:9091" # admin port, host-side only: just backfill pauses ingest/archiver here
     depends_on:
       postgres:
         condition: service_healthy

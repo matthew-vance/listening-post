@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/matthew-vance/listening-post/internal/kafkatest"
+	"github.com/matthew-vance/listening-post/internal/pause"
 )
 
 const (
@@ -175,7 +176,7 @@ func TestBearerAuth(t *testing.T) {
 
 func TestHealthz(t *testing.T) {
 	rec := httptest.NewRecorder()
-	newAdminServer(&readiness{}, allOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	newAdminServer(&readiness{}, slog.New(slog.DiscardHandler), pause.New(), pause.New(), allOK).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -210,7 +211,7 @@ func TestReadyz(t *testing.T) {
 			r.ready.Store(tt.ready)
 
 			rec := httptest.NewRecorder()
-			newAdminServer(r, tt.checks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			newAdminServer(r, slog.New(slog.DiscardHandler), pause.New(), pause.New(), tt.checks).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 
 			if rec.Code != tt.wantCode {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantCode)
@@ -247,7 +248,7 @@ func TestEventsPost(t *testing.T) {
 		station, received, published = s, at, append(published, events...)
 		return nil
 	})
-	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture)
+	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture, pause.New())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := post(srv, "/v1/events", tt.token, tt.body)
@@ -263,9 +264,36 @@ func TestEventsPost(t *testing.T) {
 
 	t.Run("publish failure", func(t *testing.T) {
 		failing := publisherFunc(func(context.Context, string, time.Time, []event) error { return errors.New("boom") })
-		srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, failing)
+		srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, failing, pause.New())
 		wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusInternalServerError)
 	})
+}
+
+func TestIngestPause(t *testing.T) {
+	gate := pause.New()
+	published := 0
+	capture := publisherFunc(func(context.Context, string, time.Time, []event) error { published++; return nil })
+	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture, gate)
+	admin := newAdminServer(&readiness{}, slog.New(slog.DiscardHandler), gate, pause.New(), allOK)
+
+	// events flow while ingest is live
+	wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusOK)
+
+	// pausing via the admin endpoint refuses events so a station buffers and retries
+	rec := httptest.NewRecorder()
+	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/ingest/pause", nil))
+	wantStatus(t, rec, http.StatusOK)
+	wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusServiceUnavailable)
+
+	// resuming lets them through again
+	rec = httptest.NewRecorder()
+	admin.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/ingest/resume", nil))
+	wantStatus(t, rec, http.StatusOK)
+	wantStatus(t, post(srv, "/v1/events", testToken, validEvents), http.StatusOK)
+
+	if published != 2 {
+		t.Fatalf("published %d events, want 2 (the paused one must be refused)", published)
+	}
 }
 
 func TestHeartbeatPost(t *testing.T) {
@@ -295,7 +323,7 @@ func TestHeartbeatPost(t *testing.T) {
 		saved = append(saved, hb)
 		return nil
 	})
-	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, capture, noopPublisher)
+	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, capture, noopPublisher, pause.New())
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := post(srv, "/v1/stations/heartbeat", tt.token, tt.body)
@@ -311,7 +339,7 @@ func TestHeartbeatPost(t *testing.T) {
 
 	t.Run("store failure", func(t *testing.T) {
 		failing := saverFunc(func(context.Context, string, time.Time, heartbeatRequest) error { return errors.New("boom") })
-		srv := newServer(slog.New(slog.DiscardHandler), fixedStations, failing, noopPublisher)
+		srv := newServer(slog.New(slog.DiscardHandler), fixedStations, failing, noopPublisher, pause.New())
 		wantStatus(t, post(srv, "/v1/stations/heartbeat", testToken, `{`+required+`}`), http.StatusInternalServerError)
 	})
 }
@@ -332,7 +360,7 @@ func TestRun(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), pause.New()) }()
 
 	if err := waitForReady(ctx, 2*time.Second, "http://localhost:"+adminPort+"/readyz"); err != nil {
 		t.Fatal(err)
@@ -377,7 +405,7 @@ func TestRunReturnsWhenListenFails(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- Run(t.Context(), cfg, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(t.Context(), cfg, slog.New(slog.DiscardHandler), pause.New()) }()
 
 	select {
 	case err := <-done:

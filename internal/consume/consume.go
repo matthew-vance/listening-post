@@ -12,17 +12,38 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+// ErrPaused is returned by Batch when its pause function reports true: the batch has been flushed and offsets
+// committed, and the caller should stop consuming until it is resumed.
+var ErrPaused = errors.New("paused")
+
 // Batch consumes a topic into batches of decoded records until ctx is cancelled. It polls, decodes each record
 // via decode, accumulates until flushRecords records or flushSeconds, then calls flush to store the batch and
 // commit its offsets. A non-nil error from decode is fatal: it propagates, naming the record, with the offset
 // left uncommitted so the record is re-read on restart rather than dropped. Everything a poll returns is decoded
 // before any exit path can commit — a poll is uncommitted the moment it returns.
-func Batch[T any](ctx context.Context, client *kgo.Client, flushRecords, flushSeconds int, decode func(*kgo.Record) (T, error), flush func([]T) error) error {
+//
+// pause, if non-nil, is checked before each poll: when it reports true, any pending rows are flushed and Batch
+// returns ErrPaused, so the caller can release the consumer and wait to be resumed.
+func Batch[T any](ctx context.Context, client *kgo.Client, flushRecords, flushSeconds int, decode func(*kgo.Record) (T, error), flush func([]T) error, pause func() bool) error {
 	flushAfter := time.Duration(flushSeconds) * time.Second
 	pending := make([]T, 0, flushRecords)
 	lastFlush := time.Now()
 	for {
-		pollCtx, cancel := context.WithDeadline(ctx, lastFlush.Add(flushAfter))
+		if pause != nil && pause() {
+			if err := flush(pending); err != nil {
+				return err
+			}
+			return ErrPaused
+		}
+		deadline := lastFlush.Add(flushAfter)
+		if pause != nil {
+			// Tick the poll once a second so a pause is noticed promptly instead of only when the flush
+			// deadline (or the next record) arrives.
+			if d := time.Now().Add(time.Second); d.Before(deadline) {
+				deadline = d
+			}
+		}
+		pollCtx, cancel := context.WithDeadline(ctx, deadline)
 		fetches := client.PollRecords(pollCtx, flushRecords-len(pending))
 		cancel()
 		if err := collect(fetches, decode, &pending); err != nil {

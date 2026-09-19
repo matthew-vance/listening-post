@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sync/errgroup"
@@ -13,17 +14,10 @@ import (
 	"github.com/matthew-vance/listening-post/internal/archiver"
 	"github.com/matthew-vance/listening-post/internal/gateway"
 	"github.com/matthew-vance/listening-post/internal/history"
+	"github.com/matthew-vance/listening-post/internal/pause"
 )
 
 type service func(ctx context.Context, logger *slog.Logger) error
-
-// services run together in one process, connected through Kafka rather than each other. Each Run documents its
-// own environment; the names are disjoint so they can share one. The processor is a Flink job (flink/), not here.
-var services = map[string]service{
-	"gateway":  svc(gateway.LoadConfig, gateway.Run),
-	"archiver": svc(archiver.LoadConfig, archiver.Run),
-	"history":  svc(history.LoadConfig, history.Run),
-}
 
 func svc[C any](load func(func(string) string) (C, error), run func(context.Context, C, *slog.Logger) error) service {
 	return func(ctx context.Context, logger *slog.Logger) error {
@@ -39,10 +33,37 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(ctx, logger, services); err != nil {
+	archiverGate := pause.New()
+	if err := run(ctx, logger, selectedServices(archiverGate)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// selectedServices returns the services this process runs: all of them, unless SERVICES names a subset (a
+// comma-separated list). The archiver's pause gate is shared with the gateway so its admin server can pause the
+// archiver in-process — that's how the backfill stops the archiver without a separate container.
+func selectedServices(archiverGate *pause.Gate) map[string]service {
+	all := map[string]service{
+		"gateway": svc(gateway.LoadConfig, func(ctx context.Context, cfg gateway.Config, logger *slog.Logger) error {
+			return gateway.Run(ctx, cfg, logger, archiverGate)
+		}),
+		"archiver": svc(archiver.LoadConfig, func(ctx context.Context, cfg archiver.Config, logger *slog.Logger) error {
+			return archiver.Run(ctx, cfg, logger, archiverGate)
+		}),
+		"history": svc(history.LoadConfig, history.Run),
+	}
+	v := os.Getenv("SERVICES")
+	if v == "" {
+		return all
+	}
+	out := make(map[string]service, len(all))
+	for _, name := range strings.Split(v, ",") {
+		if svc, ok := all[name]; ok {
+			out[name] = svc
+		}
+	}
+	return out
 }
 
 // run starts every service and blocks until all have returned. The first to return, with an error or on ctx

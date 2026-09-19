@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/matthew-vance/listening-post/internal/kafkatest"
+	"github.com/matthew-vance/listening-post/internal/pause"
 	"github.com/matthew-vance/listening-post/internal/wire"
 	"github.com/parquet-go/parquet-go"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -46,7 +47,7 @@ func TestRunArchivesTopic(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), pause.New()) }()
 	var rows []row
 	for deadline := time.Now().Add(20 * time.Second); len(rows) < 25 && time.Now().Before(deadline); {
 		time.Sleep(200 * time.Millisecond)
@@ -77,7 +78,7 @@ func TestRunArchivesTopic(t *testing.T) {
 	cfg.ArchiveDir = fresh
 	ctx, cancel = context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := Run(ctx, cfg, slog.New(slog.DiscardHandler)); err != nil {
+	if err := Run(ctx, cfg, slog.New(slog.DiscardHandler), pause.New()); err != nil {
 		t.Fatal(err)
 	}
 	if n := countFiles(t, fresh); n != 0 {

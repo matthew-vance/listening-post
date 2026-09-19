@@ -58,7 +58,7 @@ func decodeRecord(rec *kgo.Record) (traceRow, error) {
 // only after the batch's rows are all in the table. A record that isn't a Trace is fatal: it propagates with the
 // offset uncommitted, so a contract break surfaces loudly instead of silently dropping history.
 func (w *writer) run(ctx context.Context) error {
-	return consume.Batch(ctx, w.client, w.FlushRecords, w.FlushSeconds, decodeRecord, w.flush)
+	return consume.Batch(ctx, w.client, w.FlushRecords, w.FlushSeconds, decodeRecord, w.flush, nil)
 }
 
 // flush inserts rows, then commits their offsets. A crash between the two re-reads the batch, and the idempotency
