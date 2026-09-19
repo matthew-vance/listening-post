@@ -8,9 +8,10 @@ import org.apache.flink.streaming.util.ProcessFunctionTestHarnesses;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.Named;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -32,15 +33,10 @@ class StateFunctionTest {
         return Decode.decode(new Event(station, 0, ts, raw, ts));
     }
 
-    static KeyedOneInputStreamOperatorTestHarness<String, Decoded, StateOut> newHarness() throws Exception {
-        var h = ProcessFunctionTestHarnesses.forKeyedProcessFunction(new StateFunction(EXPIRE_MS), (Decoded d) -> d.icao, Types.STRING);
-        h.setProcessingTime(BASE.toEpochMilli());
-        return h;
-    }
-
     @BeforeEach
     void setUp() throws Exception {
-        harness = newHarness();
+        harness = ProcessFunctionTestHarnesses.forKeyedProcessFunction(new StateFunction(EXPIRE_MS), (Decoded d) -> d.icao, Types.STRING);
+        harness.setProcessingTime(BASE.toEpochMilli());
     }
 
     @AfterEach
@@ -85,30 +81,30 @@ class StateFunctionTest {
         assertEquals(0, out().size(), "nothing new: nothing republished");
     }
 
-    /** The merge rules are pinned by internal/wire/testdata/merge.json. */
-    @TestFactory
-    List<DynamicTest> mergeGolden() throws Exception {
-        List<DynamicTest> tests = new ArrayList<>();
+    static List<Named<JsonNode>> mergeScenarios() throws Exception {
+        List<Named<JsonNode>> scenarios = new ArrayList<>();
         for (JsonNode sc : Golden.load("merge.json")) {
-            tests.add(DynamicTest.dynamicTest(sc.get("name").asText(), () -> {
-                // @BeforeEach runs once per factory, not per dynamic test: each scenario needs its own aircraft state
-                harness.close();
-                harness = newHarness();
-                int i = 0;
-                for (JsonNode st : sc.get("steps")) {
-                    send(msg(st.get("station").asText(), Instant.parse(st.get("ts").asText()), st.get("raw").asText()));
-                    List<StateOut> out = out();
-                    if (st.get("emit").isNull()) {
-                        assertEquals(0, out.size(), "step " + i + " must emit nothing");
-                    } else {
-                        assertEquals(1, out.size(), "step " + i + " must emit once");
-                        assertEquals(Golden.normalize(st.get("emit")), Golden.json(out.get(0).snapshot()), "step " + i);
-                    }
-                    i++;
-                }
-            }));
+            scenarios.add(Named.of(sc.get("name").asText(), sc));
         }
-        return tests;
+        return scenarios;
+    }
+
+    /** The merge rules are pinned by internal/wire/testdata/merge.json. */
+    @ParameterizedTest
+    @MethodSource("mergeScenarios")
+    void mergeGolden(JsonNode sc) throws Exception {
+        int i = 0;
+        for (JsonNode st : sc.get("steps")) {
+            send(msg(st.get("station").asText(), Instant.parse(st.get("ts").asText()), st.get("raw").asText()));
+            List<StateOut> out = out();
+            if (st.get("emit").isNull()) {
+                assertEquals(0, out.size(), "step " + i + " must emit nothing");
+            } else {
+                assertEquals(1, out.size(), "step " + i + " must emit once");
+                assertEquals(Golden.normalize(st.get("emit")), Golden.normalize(out.get(0).snapshot()), "step " + i);
+            }
+            i++;
+        }
     }
 
     @Test

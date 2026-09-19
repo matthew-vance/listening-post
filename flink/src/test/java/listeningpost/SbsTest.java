@@ -24,7 +24,7 @@ class SbsTest {
                 }
                 Decoded d = Decode.decode(value);
                 assertEquals(tc.get("key").asText(), d.key());
-                assertEquals(Golden.normalize(tc.get("want")), Golden.json(d));
+                assertEquals(Golden.normalize(tc.get("want")), Golden.normalize(d));
             }));
         }
         return tests;

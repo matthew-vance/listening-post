@@ -25,13 +25,9 @@ final class Golden {
         }
     }
 
-    static Object normalize(JsonNode node) throws IOException {
-        return norm(Json.MAPPER.treeToValue(node, Object.class));
-    }
-
-    /** A Java object as fixture-comparable JSON: serialize with the production mapper, then normalize. */
-    static Object json(Object o) throws IOException {
-        return norm(Json.MAPPER.readValue(Json.MAPPER.writeValueAsString(o), Object.class));
+    /** A fixture node or a Java object as comparable JSON: through the production mapper, then normalized. */
+    static Object normalize(Object o) {
+        return norm(Json.MAPPER.convertValue(o, Object.class));
     }
 
     private static Object norm(Object v) {

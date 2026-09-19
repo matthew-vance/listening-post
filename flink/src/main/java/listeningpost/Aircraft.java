@@ -1,6 +1,5 @@
 package listeningpost;
 
-import java.time.Instant;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -15,7 +14,7 @@ public class Aircraft {
             SQUAWK = 7, ALERT = 8, EMERGENCY = 9, SPI = 10, ON_GROUND = 11, POSITION_TS = 12;
 
     public Snapshot snap = new Snapshot();
-    public long[] fieldTs = new long[13]; // epoch millis; 0 = never set
+    public long[] fieldTs = new long[POSITION_TS + 1]; // epoch millis; 0 = never set
     public boolean dirty; // heard from since its last snapshot went out
 
     public static Aircraft create(String icao) {

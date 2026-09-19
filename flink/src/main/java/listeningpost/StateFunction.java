@@ -48,7 +48,7 @@ public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOu
         if (a == null) {
             return;
         }
-        if (a.expired(ctx.timerService().currentProcessingTime(), expireMs)) {
+        if (a.expired(timestamp, expireMs)) {
             out.collect(new StateOut(ctx.getCurrentKey(), null));
             state.clear();
             return;
