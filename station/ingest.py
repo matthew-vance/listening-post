@@ -36,9 +36,9 @@ def ingest(
 
     def flush() -> None:
         nonlocal written, last_flush
-        buffer.append(db, pending)
-        written += len(pending)
-        log.info("committed %d events (%d total this connection)", len(pending), written)
+        n = buffer.append(db, pending)
+        written += n
+        log.info("committed %d events (%d total this connection)", n, written)
         pending.clear()
         last_flush = now()
 

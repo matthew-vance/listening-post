@@ -34,6 +34,11 @@ class BufferTest(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             buffer.append(ro, [("t", "r")])
 
+    def test_append_rejects_blank_raw_and_returns_rows_written(self) -> None:
+        # the feed emits a blank line around a reconnect; the gateway 422s an empty raw and publish would wedge on it
+        self.assertEqual(buffer.append(self.db, [("t1", ""), ("t2", "a"), ("t3", "")]), 1)
+        self.assertEqual([e["raw"] for e in buffer.next_batch(self.db, 10)], ["a"])
+
     def test_append_then_drain_in_id_order(self) -> None:
         buffer.append(self.db, [("t1", "a"), ("t2", "b"), ("t3", "c")])
 

@@ -69,6 +69,13 @@ class IngestTest(unittest.TestCase):
             ],
         )
 
+    def test_counts_only_rows_the_buffer_kept(self) -> None:
+        read = ScriptedReader("", "MSG,1,1,1,ABC123,1", "")
+
+        written = ingest(read, self.db, fixed_clock, batch_size=BIG, flush_after=NEVER)
+
+        self.assertEqual(written, 1)
+
     def test_commits_every_batch_size_lines(self) -> None:
         read = ScriptedReader("a", "b", "c")
         seen: list[int] = []

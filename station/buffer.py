@@ -55,10 +55,16 @@ def open(path: str, *, readonly: bool = False) -> sqlite3.Connection:
     return db
 
 
-def append(db: sqlite3.Connection, rows: list[tuple[str, str]]) -> None:
-    """Insert (ts, raw) rows in one short transaction so the write lock is held for milliseconds."""
+def append(db: sqlite3.Connection, rows: list[tuple[str, str]]) -> int:
+    """Insert (ts, raw) rows in one short transaction so the write lock is held for milliseconds; returns how many.
+
+    This is the only writer, so it is where a row is rejected: publish trusts every row it reads. A blank raw
+    (the feed emits one around a reconnect) would be 422'd by the gateway and wedge the queue at its head.
+    """
+    rows = [row for row in rows if row[1]]
     db.executemany("INSERT INTO events (ts, raw) VALUES (?, ?)", rows)
     db.commit()
+    return len(rows)
 
 
 def next_batch(db: sqlite3.Connection, limit: int) -> list[Event]:
