@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 from multiprocessing.connection import wait
 
-from station import buffer, heartbeat, ingest, publish
+from station import buffer, gateway, heartbeat, ingest, publish
 
 log = logging.getLogger("station")
 
@@ -79,7 +79,7 @@ def supervise(targets: dict[str, Callable[[], None]], restart_after: float) -> N
 def main() -> None:
     setup_logging()
     # Checked once here rather than in publish/heartbeat: a missing token must fail loudly, not restart-loop.
-    if not os.environ.get("STATION_TOKEN"):
+    if not gateway.TOKEN:
         log.error("STATION_TOKEN is not set; mint one with `just station-add`")
         sys.exit(1)
     buffer.create(buffer.DB_PATH)  # before any child opens it; the children never create

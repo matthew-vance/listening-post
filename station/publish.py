@@ -3,7 +3,6 @@ import os
 import sqlite3
 import time
 from collections.abc import Callable
-from urllib.error import HTTPError
 
 from station import buffer, gateway
 from station.buffer import Event
@@ -39,9 +38,7 @@ def main() -> None:
             # ponytail: every failure retries forever, so a 4xx wedges the queue at its head.
             # Gateway and publish ship from one repo, so that's a deploy mismatch; add dead-lettering if it ever happens.
             except gateway.POST_ERRORS as e:
-                # a 4xx names what the gateway objected to; without the body all you see is the status
-                body = e.read().decode(errors="replace") if isinstance(e, HTTPError) else ""
-                log.warning("post failed: %s %s", e, body)
+                log.warning("post failed: %s", e)
                 time.sleep(retry)
     finally:
         db.close()

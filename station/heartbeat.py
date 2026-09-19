@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from station import buffer, gateway
-from station.buffer import DB_PATH, BufferStats
+from station.buffer import BufferStats
 
 log = logging.getLogger("heartbeat")
 
@@ -65,12 +65,12 @@ def sample_buffer(db_path: str) -> BufferStats:
 
 def main() -> None:
     interval = float(os.environ.get("INTERVAL_SECONDS", "60"))
-    disk_path = os.path.dirname(os.path.abspath(DB_PATH))
+    disk_path = os.path.dirname(os.path.abspath(buffer.DB_PATH))
 
     log.info("reporting to %s every %ss", gateway.URL, interval)
     state: State | None = None
     while True:
-        stats = sample_buffer(DB_PATH)
+        stats = sample_buffer(buffer.DB_PATH)
         disk_free = shutil.disk_usage(disk_path).free
         report, state = build_report(datetime.now(UTC), uptime_seconds(), disk_free, stats, state)
         try:

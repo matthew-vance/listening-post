@@ -1,7 +1,6 @@
 """The request bodies a station sends are pinned by internal/wire/testdata; the gateway's tests post the same files."""
 
 import json
-import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +9,7 @@ from station import buffer
 from station.buffer import BufferStats
 from station.heartbeat import State, build_report
 from station.publish import publish_once
+from station.test_buffer import fresh_buffer
 
 TESTDATA = Path(__file__).resolve().parents[1] / "internal" / "wire" / "testdata"
 
@@ -38,14 +38,10 @@ class HeartbeatGoldenTest(unittest.TestCase):
 class EventsGoldenTest(unittest.TestCase):
     def test_publish_posts_the_golden_body(self) -> None:
         case = load("events.json")
-        with tempfile.TemporaryDirectory() as tmp:
-            path = str(Path(tmp) / "events.db")
-            buffer.create(path)
-            db = buffer.open(path)
-            buffer.append(db, [(r["ts"], r["raw"]) for r in case["rows"]])
-            posted: list[list[object]] = []
-            publish_once(db, posted.append, batch_size=10)
-            db.close()
+        _, db = fresh_buffer(self)
+        buffer.append(db, [(r["ts"], r["raw"]) for r in case["rows"]])
+        posted: list[list[object]] = []
+        publish_once(db, posted.append, batch_size=10)
         self.assertEqual(posted, [case["body"]["events"]])  # main() wraps the batch as {"events": ...}
 
 

@@ -11,6 +11,7 @@ class PostJsonTest(unittest.TestCase):
     def setUp(self) -> None:
         self.requests: list[dict[str, object]] = []
         self.status = 200
+        self.reply = b""
         test = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -25,7 +26,9 @@ class PostJsonTest(unittest.TestCase):
                     }
                 )
                 self.send_response(test.status)
+                self.send_header("Content-Length", str(len(test.reply)))
                 self.end_headers()
+                self.wfile.write(test.reply)
 
             def log_message(self, *_: object) -> None:
                 pass
@@ -50,11 +53,12 @@ class PostJsonTest(unittest.TestCase):
             ],
         )
 
-    def test_non_2xx_raises(self) -> None:
-        self.status = 500
+    def test_non_2xx_raises_with_the_body_in_the_message(self) -> None:
+        self.status, self.reply = 422, b'{"problems":{"events[4].raw":"must not be empty"}}'
         with self.assertRaises(HTTPError) as cm:
             post_json(self.url, "secret-token", "/v1/things", {}, timeout=2)
-        cm.exception.close()  # HTTPError is file-like; unclosed it warns at GC
+        self.assertEqual(cm.exception.code, 422)
+        self.assertTrue(str(cm.exception).endswith(' {"problems":{"events[4].raw":"must not be empty"}}'), str(cm.exception))
 
 
 if __name__ == "__main__":

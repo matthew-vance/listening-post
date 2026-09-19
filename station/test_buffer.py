@@ -7,14 +7,24 @@ from station import buffer
 from station.buffer import BufferStats
 
 
+def fresh_buffer(tc: unittest.TestCase) -> tuple[str, sqlite3.Connection]:
+    """A created, opened buffer in a temp dir (what the supervisor does before starting any loop), torn down with tc."""
+    tmp = tempfile.TemporaryDirectory()
+    tc.addCleanup(tmp.cleanup)
+    path = str(Path(tmp.name) / "events.db")
+    buffer.create(path)
+    db = buffer.open(path)
+    tc.addCleanup(db.close)
+    return path, db
+
+
+def depth(db: sqlite3.Connection) -> int:
+    return buffer.sample(db).depth
+
+
 class BufferTest(unittest.TestCase):
     def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        self.path = str(Path(tmp.name) / "events.db")
-        buffer.create(self.path)
-        self.db = buffer.open(self.path)
-        self.addCleanup(self.db.close)
+        self.path, self.db = fresh_buffer(self)
 
     def test_create_is_idempotent_and_keeps_rows(self) -> None:
         buffer.append(self.db, [("t", "r")])
@@ -35,7 +45,6 @@ class BufferTest(unittest.TestCase):
             buffer.append(ro, [("t", "r")])
 
     def test_append_rejects_blank_raw_and_returns_rows_written(self) -> None:
-        # the feed emits a blank line around a reconnect; the gateway 422s an empty raw and publish would wedge on it
         self.assertEqual(buffer.append(self.db, [("t1", ""), ("t2", "a"), ("t3", "")]), 1)
         self.assertEqual([e["raw"] for e in buffer.next_batch(self.db, 10)], ["a"])
 

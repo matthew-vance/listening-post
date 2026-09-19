@@ -1,15 +1,13 @@
 import socket
-import sqlite3
-import tempfile
 import threading
 import time
 import unittest
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from station import buffer
 from station.ingest import connect, ingest
+from station.test_buffer import depth, fresh_buffer
 
 FIXED = datetime(2026, 9, 13, 10, 0, 0, tzinfo=UTC)
 BIG = 1000
@@ -18,10 +16,6 @@ NEVER = timedelta(hours=1)
 
 def fixed_clock() -> datetime:
     return FIXED
-
-
-def count(db: sqlite3.Connection) -> int:
-    return buffer.sample(db).depth
 
 
 class ScriptedReader:
@@ -46,17 +40,12 @@ class ScriptedReader:
 
 class IngestTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        path = str(Path(self.tmp.name) / "events.db")
-        buffer.create(path)
-        self.db = buffer.open(path)
+        path, self.db = fresh_buffer(self)
         self.reader = buffer.open(path, readonly=True)  # separate connection: sees only committed rows
-        self.addCleanup(self.db.close)
         self.addCleanup(self.reader.close)
 
     def test_writes_lines_with_ts_and_autoincrement_id_and_returns_count_at_eof(self) -> None:
-        read = ScriptedReader("MSG,1,1,1,ABC123,1", "MSG,3,1,1,ABC123,1,,,,,35000")
+        read = ScriptedReader("MSG,1,1,1,ABC123,1", "", "MSG,3,1,1,ABC123,1,,,,,35000")  # the buffer drops the blank
 
         written = ingest(read, self.db, fixed_clock, batch_size=BIG, flush_after=NEVER)
 
@@ -69,23 +58,16 @@ class IngestTest(unittest.TestCase):
             ],
         )
 
-    def test_counts_only_rows_the_buffer_kept(self) -> None:
-        read = ScriptedReader("", "MSG,1,1,1,ABC123,1", "")
-
-        written = ingest(read, self.db, fixed_clock, batch_size=BIG, flush_after=NEVER)
-
-        self.assertEqual(written, 1)
-
     def test_commits_every_batch_size_lines(self) -> None:
         read = ScriptedReader("a", "b", "c")
         seen: list[int] = []
-        read.on_read = lambda: seen.append(count(self.reader))
+        read.on_read = lambda: seen.append(depth(self.reader))
 
         ingest(read, self.db, fixed_clock, batch_size=2, flush_after=NEVER)
 
         # commit happens when the *next* item is about to be read after the batch fills
         self.assertEqual(seen, [0, 0, 2, 2])
-        self.assertEqual(count(self.reader), 3)
+        self.assertEqual(depth(self.reader), 3)
 
     def test_bounds_each_read_by_the_time_left_to_the_next_flush(self) -> None:
         clock = FIXED
@@ -94,7 +76,7 @@ class IngestTest(unittest.TestCase):
 
         def before_read() -> None:
             nonlocal clock
-            seen.append(count(self.reader))
+            seen.append(depth(self.reader))
             if read.script and read.script[0] is None:
                 clock += timedelta(seconds=6)  # the None comes back after the window has passed
 
@@ -132,7 +114,7 @@ class IngestTest(unittest.TestCase):
         with self.assertRaises(OSError):
             ingest(failing, self.db, fixed_clock, batch_size=BIG, flush_after=NEVER)
 
-        self.assertEqual(count(self.reader), 2)
+        self.assertEqual(depth(self.reader), 2)
 
 
 class ConnectTest(unittest.TestCase):

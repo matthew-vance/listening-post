@@ -69,7 +69,7 @@ def append(db: sqlite3.Connection, rows: list[tuple[str, str]]) -> int:
 
 def next_batch(db: sqlite3.Connection, limit: int) -> list[Event]:
     rows = db.execute("SELECT id, ts, raw FROM events ORDER BY id LIMIT ?", (limit,)).fetchall()
-    return [Event(id=row["id"], ts=row["ts"], raw=row["raw"]) for row in rows]
+    return [Event(**row) for row in rows]
 
 
 def ack(db: sqlite3.Connection, batch: list[Event]) -> None:
