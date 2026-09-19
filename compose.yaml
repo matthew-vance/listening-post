@@ -159,7 +159,8 @@ services:
         jobmanager.memory.process.size: 1024m
         taskmanager.memory.process.size: 1024m
         taskmanager.memory.managed.size: 0m
-        execution.checkpointing.interval: 10s
+        # short because output is only visible once the checkpoint commits its transactions; state is tiny
+        execution.checkpointing.interval: 2s
         execution.checkpointing.dir: file:///opt/flink/checkpoints
         execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
         restart-strategy.type: fixed-delay
