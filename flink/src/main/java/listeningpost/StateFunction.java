@@ -3,8 +3,12 @@ package listeningpost;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.api.common.functions.OpenContext;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
+
+import java.util.UUID;
 
 /**
  * Folds decoded messages into per-aircraft state and publishes a snapshot per change. A processing-time timer
@@ -12,9 +16,13 @@ import org.apache.flink.util.Collector;
  * heard from since their last snapshot but unchanged, so last_seen and messages don't go stale on the topic.
  * Processing time rather than event time because an idle receiver would stall watermarks and nothing would
  * ever expire.
+ *
+ * Each changed snapshot is also emitted to the TRACES side output, stamped with a fresh idempotency key, so the
+ * history topic gets only real changes — never the sweep's heard-but-unchanged republish, never a tombstone.
  */
 public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOut> {
     static final long SWEEP_MS = 10_000;
+    static final OutputTag<Trace> TRACES = new OutputTag<>("traces", TypeInformation.of(Trace.class));
 
     private final long expireMs;
     private transient ValueState<Aircraft> state;
@@ -38,6 +46,7 @@ public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOu
         }
         if (a.apply(m)) {
             out.collect(new StateOut(m.icao, a.snap));
+            ctx.output(TRACES, Trace.of(a.snap, UUID.randomUUID().toString()));
         }
         state.update(a);
     }

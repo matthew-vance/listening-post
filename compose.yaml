@@ -15,8 +15,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   postgres:
-    image: postgres:18-alpine
+    image: timescale/timescaledb:2.29.1-pg18
     restart: unless-stopped
+    # preload the extension explicitly: an existing data volume keeps the postgresql.conf it was first
+    # created with (pre-timescale), and the image only writes shared_preload_libraries on a fresh initdb.
+    command: ["postgres", "-c", "shared_preload_libraries=timescaledb"]
     environment:
       POSTGRES_DB: listening_post
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
@@ -85,7 +88,8 @@ services:
       retries: 10
 
   # One-shot: declares topics and exits. Re-runs harmlessly on every `up` (--if-not-exists).
-  # Names must match the constants in internal/wire/wire.go and flink/.../ProcessorJob.java.
+  # Names must match the constants in internal/wire/wire.go, internal/history/config.go, and
+  # flink/.../ProcessorJob.java.
   kafka-init:
     image: apache/kafka:4.3.1
     depends_on:
@@ -103,6 +107,7 @@ services:
         topic events.raw
         topic events.decoded
         topic aircraft.state $$compact
+        topic aircraft.state_history
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
@@ -117,9 +122,8 @@ services:
         condition: service_healthy
 
   # The processor (flink/). Application mode: the jobmanager runs the one job baked into the image; the
-  # taskmanager does the work. Checkpoints are
-  # retained on a shared volume, and the jobmanager resumes from the newest complete one on start, so any
-  # restart recovers state without ZooKeeper/Kubernetes HA; see README.
+  # taskmanager does the work. Checkpoints are retained on a shared volume, and the jobmanager resumes from
+  # the newest complete one on start, so any restart recovers state without ZooKeeper/Kubernetes HA; see README.
   flink-jobmanager:
     build: &flink-build
       context: . # the repo root: the tests read internal/wire/testdata
@@ -134,7 +138,9 @@ services:
         latest=$$(ls -t /opt/flink/checkpoints/*/chk-*/_metadata 2>/dev/null | head -n 1)
         keep=$$(dirname "$$(dirname "$$latest")")
         for d in /opt/flink/checkpoints/*/; do [ "$${d%/}" = "$$keep" ] || rm -rf "$$d"; done
-        exec /docker-entrypoint.sh standalone-job --job-classname listeningpost.ProcessorJob \
+        # --allowNonRestoredState: a job whose topology changed (a new/changed operator) must not crash-loop
+        # on an old checkpoint; operators that no longer match are dropped, the rest restore as usual.
+        exec /docker-entrypoint.sh standalone-job --job-classname listeningpost.ProcessorJob --allowNonRestoredState \
           $${latest:+--fromSavepoint "$$(dirname "$$latest")"}
     environment:
       KAFKA_BROKERS: kafka:9092

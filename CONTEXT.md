@@ -30,3 +30,7 @@ _Avoid_: state, aircraft state, update, delta
 **Tombstone**:
 The record that retires an aircraft's Snapshot once it has been silent for the expiry window.
 _Avoid_: delete, null record
+
+**Trace**:
+One aircraft's changed Snapshots recorded over time, append-only, for drawing a flight path later. A new Trace lands only when the Snapshot actually changes, so it carries the aircraft's history without the sweep republishes.
+_Avoid_: track (already the SBS heading field), history

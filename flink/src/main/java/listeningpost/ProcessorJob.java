@@ -25,8 +25,9 @@ import java.util.Objects;
  */
 public final class ProcessorJob {
     static final String RAW = "events.raw";
-    static final String DECODED = "events.decoded"; // parsed lines, keyed by ICAO
-    static final String STATE = "aircraft.state";   // compacted: latest snapshot per aircraft, keyed by ICAO
+    static final String DECODED = "events.decoded";     // parsed lines, keyed by ICAO
+    static final String STATE = "aircraft.state";        // compacted: latest snapshot per aircraft, keyed by ICAO
+    static final String STATE_HISTORY = "aircraft.state_history"; // append-only: changed snapshots, keyed by ICAO
 
     public static void main(String[] args) throws Exception {
         String brokers = Objects.requireNonNull(System.getenv("KAFKA_BROKERS"), "KAFKA_BROKERS is not set");
@@ -42,12 +43,16 @@ public final class ProcessorJob {
                 .build();
 
         DataStream<Decoded> decoded = env.fromSource(source, WatermarkStrategy.noWatermarks(), RAW)
-                .flatMap(new Decode()).name("decode");
-        decoded.sinkTo(sink(brokers, DECODED, Decoded::key, d -> d)).name(DECODED);
-        decoded.filter(d -> d.icao != null) // nothing to key state on
+                .uid("raw-source")
+                .flatMap(new Decode()).name("decode").uid("decode");
+        decoded.sinkTo(sink(brokers, DECODED, Decoded::key, d -> d)).name(DECODED).uid("decoded-sink");
+        var state = decoded.filter(d -> d.icao != null) // nothing to key state on
+                .uid("icao-filter")
                 .keyBy(d -> d.icao)
-                .process(new StateFunction(expireMs)).name("state")
-                .sinkTo(sink(brokers, STATE, StateOut::icao, StateOut::snapshot)).name(STATE);
+                .process(new StateFunction(expireMs)).name("state").uid("state");
+        state.sinkTo(sink(brokers, STATE, StateOut::icao, StateOut::snapshot)).name(STATE).uid("state-sink");
+        state.getSideOutput(StateFunction.TRACES)
+                .sinkTo(sink(brokers, STATE_HISTORY, t -> t.icao, t -> t)).name(STATE_HISTORY).uid("state-history-sink");
         env.execute("processor");
     }
 

@@ -20,12 +20,14 @@ flowchart LR
         subgraph binary [listening-post]
             gateway
             archiver
+            history
         end
         traefik --> gateway
-        gateway --> postgres[(postgres)]
+        gateway --> postgres[(postgres, timescaledb)]
         gateway -- "events.raw" --> kafka[(kafka)]
         kafka --> archiver --> archive[(parquet)]
-        kafka -- "events.raw" --> processor[processor, Flink] -- "events.decoded, aircraft.state" --> kafka
+        kafka -- "events.raw" --> processor[processor, Flink] -- "events.decoded, aircraft.state, aircraft.state_history" --> kafka
+        kafka -- "aircraft.state_history" --> history --> postgres
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
@@ -53,7 +55,7 @@ Resilience is three layers, each for a distinct failure mode: the loops retry *i
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `INGEST_BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `PUBLISH_BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
-The server side is one Go binary (`main.go`, `internal/`) running the gateway and archiver as goroutines in one container via `docker compose` (`just up`) behind Traefik, plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, so either Go loop can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The two share one environment, so their variable names are disjoint.
+The server side is one Go binary (`main.go`, `internal/`) running the gateway, archiver, and history writer as goroutines in one container via `docker compose` (`just up`) behind Traefik, plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, so any Go loop can still be split into its own process later; for now one process is one thing to deploy and watch, and if any loop dies the whole binary exits and compose restarts it. The loops share one environment, so their variable names are disjoint.
 
 The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes are on a separate admin port that only Traefik can reach; `/readyz` also checks Postgres and Kafka.
 
@@ -100,7 +102,7 @@ The public API listens on 8080 and the internal `/healthz` and `/readyz` probes 
 
 ### Database
 
-Postgres runs as a compose service and is shared by every server-side service, so the schema is owned by the repo, not by any one service. It holds the station registry (`stations`, `station_tokens`) and heartbeat history (`heartbeats`). migrations live in `db/migrations/` in [goose](https://github.com/pressly/goose) SQL format, in a single sequence, and are applied out-of-band — never by a service at startup:
+Postgres runs as a compose service and is shared by every server-side service, so the schema is owned by the repo, not by any one service. The image is [TimescaleDB](https://www.timescale.com/) (a Postgres extension for time-series) so the one instance serves both the low-volume station registry (`stations`, `station_tokens`), heartbeat history (`heartbeats`), and the high-volume aircraft Traces (`aircraft_traces`, a hypertable). migrations live in `db/migrations/` in [goose](https://github.com/pressly/goose) SQL format, in a single sequence, and are applied out-of-band — never by a service at startup:
 
 ```sh
 just migrate          # apply pending (just up runs this for you, after postgres is healthy)
@@ -108,7 +110,7 @@ just migrate-status
 just migrate-down     # roll back one
 ```
 
-The goose CLI is pinned in `go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-server` needs Docker: the tests start throwaway Postgres and Kafka containers with testcontainers; `go test -short ./...` skips those.
+The goose CLI is pinned in `go.mod` via the `tool` directive, so `go tool goose` needs nothing installed. `just test-server` needs Docker: the tests start throwaway TimescaleDB and Kafka containers with testcontainers; `go test -short ./...` skips those.
 
 ### Archiver
 
@@ -131,6 +133,23 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 | `ARCHIVE_DIR`   | *(required)* | Root directory for Parquet files                   |
 
 `just up` creates `archive/` world-writable because the container runs as `nonroot` against a bind mount; revisit when storage moves to S3.
+
+### History
+
+`internal/history/` consumes `aircraft.state_history` and inserts every Trace into the `aircraft_traces` hypertable in TimescaleDB, so flight paths can be drawn later with a plain SQL range scan. It commits Kafka offsets only after a batch's rows are in the table; the processor-minted `id` rides a `UNIQUE (id, last_seen)` constraint, so an at-least-once re-read after a crash is a no-op rather than a duplicate row. A batch is 1,000 rows or 5 seconds, whichever comes first.
+
+```sql
+SELECT lat, lon, position_ts FROM aircraft_traces
+WHERE icao = 'A22123' AND last_seen BETWEEN '2026-09-14 00:00Z' AND '2026-09-15 00:00Z'
+ORDER BY position_ts;
+```
+
+Chunks compress after 7 days (`add_compression_policy`); there is no retention policy yet — history is kept forever until one is wanted.
+
+| Variable        | Default      | Purpose                                          |
+|-----------------|--------------|--------------------------------------------------|
+| `KAFKA_BROKERS` | *(required)* | Comma-separated bootstrap brokers                |
+| `DATABASE_URL`  | *(required)* | TimescaleDB connection URL (shared with gateway) |
 
 ### Processor
 
@@ -174,15 +193,19 @@ The job runs in application mode: `flink-jobmanager` runs the one job baked into
 | `KAFKA_BROKERS`         | *(required)*      | Comma-separated bootstrap brokers         |
 | `EXPIRE_SECONDS`        | `300`             | Tombstone an aircraft silent this long    |
 
+#### Traces
+
+Every time the fold *actually changes* a snapshot, it also writes a **Trace** to `aircraft.state_history` — the same snapshot stamped with a processor-minted UUID `id`. The sweep's heard-but-unchanged republish and tombstones stay on `aircraft.state` only, so the history topic carries just the aircraft's real changes, in order, keyed by ICAO. It is append-only (not compacted): it's the record flight paths are drawn from, and `aircraft.state`'s compaction is what makes it history-keeping by itself impossible.
+
 #### Map
 
 `just map` serves a live Leaflet map of `aircraft.state` at <http://localhost:8082>. It's a host-side dev tool (`map/`, Python stdlib): it folds the compacted topic via `kafka-console-consumer` in a throwaway Kafka container on the compose network, so nothing needs installing, and the page polls `/state.json` every 2 s. Markers fade when their position is over a minute old.
 
 ### Kafka
 
-A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created, and their names are constants in the code that produces them (`internal/wire/` for the gateway, `ProcessorJob.java` for the processor): `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), and `aircraft.state` (keyed by ICAO, compacted), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
+A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created, and their names are constants in the code that produces them (`internal/wire/` for the gateway, `ProcessorJob.java` for the processor): `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), `aircraft.state` (keyed by ICAO, compacted), and `aircraft.state_history` (keyed by ICAO, append-only), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
-The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`; the processor's `Decoded` and `Snapshot` live in `flink/`). `internal/wire/testdata/` holds golden fixtures: raw line → decoded record and message sequence → snapshots (run by the processor's tests), and the heartbeat and events request bodies (produced by the station's tests, accepted by the gateway's), so every cross-language contract is checked against the same data rather than kept in step by hand. See `CONTEXT.md` for the vocabulary. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates (they carry distinct offsets); the state fold tolerates them.
+The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`; the processor's `Decoded`, `Snapshot`, and `Trace` live in `flink/`). `internal/wire/testdata/` holds golden fixtures: raw line → decoded record, message sequence → snapshots, and a changed snapshot → trace (run by the processor's tests), and the heartbeat and events request bodies (produced by the station's tests, accepted by the gateway's), so every cross-language contract is checked against the same data rather than kept in step by hand. See `CONTEXT.md` for the vocabulary. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates (they carry distinct offsets); the state fold and the trace writer tolerate them.
 
 - `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
 - Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.

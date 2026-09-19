@@ -23,7 +23,7 @@ var adminURL string
 func TestMain(m *testing.M) { kafkatest.Main(m, startPostgres) }
 
 func startPostgres(ctx context.Context) (testcontainers.Container, error) {
-	pg, err := tcpostgres.Run(ctx, "postgres:18-alpine",
+	pg, err := tcpostgres.Run(ctx, "timescale/timescaledb:2.29.1-pg18",
 		tcpostgres.WithDatabase("postgres"),
 		tcpostgres.WithUsername("postgres"),
 		tcpostgres.WithPassword("test"),

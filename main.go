@@ -12,6 +12,7 @@ import (
 
 	"github.com/matthew-vance/listening-post/internal/archiver"
 	"github.com/matthew-vance/listening-post/internal/gateway"
+	"github.com/matthew-vance/listening-post/internal/history"
 )
 
 type service func(ctx context.Context, logger *slog.Logger) error
@@ -21,6 +22,7 @@ type service func(ctx context.Context, logger *slog.Logger) error
 var services = map[string]service{
 	"gateway":  svc(gateway.LoadConfig, gateway.Run),
 	"archiver": svc(archiver.LoadConfig, archiver.Run),
+	"history":  svc(history.LoadConfig, history.Run),
 }
 
 func svc[C any](load func(func(string) string) (C, error), run func(context.Context, C, *slog.Logger) error) service {

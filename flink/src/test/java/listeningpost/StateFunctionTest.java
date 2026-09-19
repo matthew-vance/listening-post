@@ -50,6 +50,14 @@ class StateFunctionTest {
         return out;
     }
 
+    List<Trace> traces() {
+        var q = harness.getSideOutput(StateFunction.TRACES);
+        List<Trace> out = new ArrayList<>();
+        q.forEach(r -> out.add(r.getValue()));
+        q.clear();
+        return out;
+    }
+
     void send(Decoded d) throws Exception {
         harness.processElement(d, d.ts.toEpochMilli());
     }
@@ -63,6 +71,7 @@ class StateFunctionTest {
         // a Kryo fallback would still work but silently break state schema evolution
         assertInstanceOf(PojoTypeInfo.class, TypeExtractor.createTypeInfo(Aircraft.class));
         assertInstanceOf(PojoTypeInfo.class, TypeExtractor.createTypeInfo(Decoded.class));
+        assertInstanceOf(PojoTypeInfo.class, TypeExtractor.createTypeInfo(Trace.class));
     }
 
     @Test
@@ -79,6 +88,54 @@ class StateFunctionTest {
 
         advance(Duration.ofMillis(StateFunction.SWEEP_MS));
         assertEquals(0, out().size(), "nothing new: nothing republished");
+    }
+
+    @Test
+    void tracesFollowChangesNotSweeps() throws Exception {
+        send(msg("s1", BASE, VELOCITY));
+        assertEquals(1, out().size());
+        List<Trace> changed = traces();
+        assertEquals(1, changed.size(), "a change lands one trace");
+        assertEquals("A22123", changed.get(0).icao);
+
+        send(msg("s1", BASE.plusSeconds(1), VELOCITY)); // identical: no change
+        assertEquals(0, out().size());
+        assertEquals(0, traces().size(), "no change, no trace");
+
+        advance(Duration.ofMillis(StateFunction.SWEEP_MS)); // heard-but-unchanged: state only
+        assertEquals(1, out().size());
+        assertEquals(0, traces().size(), "the sweep republish is not a trace");
+
+        advance(Duration.ofMillis(EXPIRE_MS)); // silent long enough: tombstone only
+        assertEquals(1, out().size());
+        assertEquals(0, traces().size(), "a tombstone is not a trace");
+    }
+
+    /** The trace wire shape is pinned by internal/wire/testdata/trace.json. */
+    @Test
+    void traceSerializationGolden() throws Exception {
+        Snapshot s = new Snapshot();
+        s.icao = "A22123";
+        s.firstSeen = Instant.parse("2026-09-14T15:00:00Z");
+        s.lastSeen = Instant.parse("2026-09-14T15:00:02Z");
+        s.positionTs = Instant.parse("2026-09-14T15:00:02Z");
+        s.stations = new String[]{"s1", "s2"};
+        s.messages = 3;
+        s.callsign = "AAL433";
+        s.altitude = 8275;
+        s.groundSpeed = 117.0;
+        s.track = 240.0;
+        s.lat = 40.14684;
+        s.lon = -83.17065;
+        s.verticalRate = 0;
+        s.squawk = "6653";
+        s.alert = false;
+        s.emergency = false;
+        s.spi = false;
+        s.onGround = false;
+
+        Trace t = Trace.of(s, "9f8b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d");
+        assertEquals(Golden.normalize(Golden.load("trace.json")), Golden.normalize(t));
     }
 
     static List<Named<JsonNode>> mergeScenarios() throws Exception {

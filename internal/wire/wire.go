@@ -1,6 +1,7 @@
 // Package wire holds the record format the Go services share over Kafka: Event on events.raw. The records
-// downstream of it (events.decoded, aircraft.state) belong to the Flink processor (flink/); their formats live in
-// its classes, and testdata/ holds the golden fixtures every cross-language contract is checked against.
+// downstream of it (events.decoded, aircraft.state, aircraft.state_history) belong to the Flink processor
+// (flink/); their formats live in its classes, and testdata/ holds the golden fixtures every cross-language
+// contract is checked against.
 package wire
 
 import (
