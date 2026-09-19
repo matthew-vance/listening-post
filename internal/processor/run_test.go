@@ -117,14 +117,18 @@ func TestRunDecodesTopic(t *testing.T) {
 // TestRunRequiresTopics: a state topic that can't take the decoded topic's partitions, or isn't compacted, fails
 // Run before anything is consumed.
 func TestRunRequiresTopics(t *testing.T) {
-	for name, cfg := range map[string]func() Config{
-		"fewer partitions": func() Config { c := testConfig(t, 2, 300); c.KafkaState = kafkatest.Compacted(t, 1); return c },
-		"not compacted":    func() Config { c := testConfig(t, 1, 300); c.KafkaState = kafkatest.TopicN(t, 1); return c },
+	for name, cfg := range map[string]func(*testing.T) Config{
+		"fewer partitions": func(t *testing.T) Config {
+			c := testConfig(t, 2, 300)
+			c.KafkaState = kafkatest.Compacted(t, 1)
+			return c
+		},
+		"not compacted": func(t *testing.T) Config { c := testConfig(t, 1, 300); c.KafkaState = kafkatest.TopicN(t, 1); return c },
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) { // the subtest's t: kafkatest skips in -short, and Skip must hit the caller
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			err := Run(ctx, cfg(), slog.New(slog.DiscardHandler))
+			err := Run(ctx, cfg(t), slog.New(slog.DiscardHandler))
 			if err == nil || ctx.Err() != nil {
 				t.Fatalf("run = %v, want a topic error before the timeout", err)
 			}
