@@ -20,8 +20,10 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 		return err
 	}
 	defer decodeClient.CloseAllowingRebalance()
-	// Snapshots go to the same partition number their decoded messages came from, so the state topic needs at
-	// least as many partitions as the decoded one.
+	if err := requireTopics(ctx, decodeClient, cfg.KafkaDecoded, cfg.KafkaState); err != nil {
+		return err
+	}
+	// Snapshots go to the same partition number their decoded messages came from (requireTopics checks it fits).
 	sl := &stateLoop{seeds: cfg.KafkaBrokers, in: cfg.KafkaDecoded, topic: cfg.KafkaState, state: newState(time.Duration(cfg.ExpireSeconds) * time.Second), logger: logger, now: time.Now}
 	stateClient, err := consumerClient(ctx, cfg.KafkaBrokers, cfg.ProcessorStateGroup, cfg.KafkaDecoded,
 		kgo.RecordPartitioner(kgo.ManualPartitioner()),

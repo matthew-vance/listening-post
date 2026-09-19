@@ -111,7 +111,7 @@ services:
         compact="--config cleanup.policy=compact --config segment.ms=600000 --config min.cleanable.dirty.ratio=0.1"
         topic events.raw
         topic events.decoded
-        # Needs at least as many partitions as events.decoded: the processor writes snapshots partition-for-partition.
+        # The processor checks at startup that this has >= events.decoded's partitions and is compacted.
         topic aircraft.state $$compact
         # Flink twins of the two above: the Flink job reads the same events.raw and writes here, so its output
         # can be compared with the Go processor's. Names must match the constants in flink/.../ProcessorJob.java.

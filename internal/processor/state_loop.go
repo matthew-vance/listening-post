@@ -44,9 +44,8 @@ func (l *stateLoop) onRevoked(_ context.Context, _ *kgo.Client, revoked map[stri
 	l.state.drop(revoked[l.in])
 }
 
-// warm reads the given partitions of aircraft.state to their end. Snapshots are produced to the same partition
-// number their decoded messages arrived on, so partition N of the state topic is exactly what an owner of
-// partition N of events.decoded needs.
+// warm reads the given partitions of aircraft.state to their end: partition N of the state topic is exactly what
+// an owner of partition N of events.decoded needs (see requireTopics).
 func (l *stateLoop) warm(ctx context.Context, partitions []int32) error {
 	if len(partitions) == 0 {
 		return nil

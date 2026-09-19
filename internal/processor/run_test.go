@@ -22,7 +22,7 @@ func testConfig(t *testing.T, partitions int32, expireSeconds int) Config {
 		KafkaRaw:            in,
 		KafkaDecoded:        kafkatest.TopicN(t, partitions),
 		ProcessorGroup:      "g_" + in,
-		KafkaState:          kafkatest.TopicN(t, partitions),
+		KafkaState:          kafkatest.Compacted(t, partitions),
 		ProcessorStateGroup: "gs_" + in,
 		ExpireSeconds:       expireSeconds,
 	}
@@ -111,6 +111,25 @@ func TestRunDecodesTopic(t *testing.T) {
 	}
 	if extra := len(kafkatest.ConsumeUpTo(t, out, 5, 3*time.Second)); extra != 4 {
 		t.Fatalf("after second run: %d records on out, want 4", extra)
+	}
+}
+
+// TestRunRequiresTopics: a state topic that can't take the decoded topic's partitions, or isn't compacted, fails
+// Run before anything is consumed.
+func TestRunRequiresTopics(t *testing.T) {
+	for name, cfg := range map[string]func() Config{
+		"fewer partitions": func() Config { c := testConfig(t, 2, 300); c.KafkaState = kafkatest.Compacted(t, 1); return c },
+		"not compacted":    func() Config { c := testConfig(t, 1, 300); c.KafkaState = kafkatest.TopicN(t, 1); return c },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			err := Run(ctx, cfg(), slog.New(slog.DiscardHandler))
+			if err == nil || ctx.Err() != nil {
+				t.Fatalf("run = %v, want a topic error before the timeout", err)
+			}
+			t.Log(err)
+		})
 	}
 }
 

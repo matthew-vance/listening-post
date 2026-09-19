@@ -88,6 +88,18 @@ func Topic(t *testing.T) string {
 
 func TopicN(t *testing.T, partitions int32) string {
 	t.Helper()
+	return createTopic(t, partitions, nil)
+}
+
+// Compacted creates a topic with cleanup.policy=compact, as aircraft.state is declared in production.
+func Compacted(t *testing.T, partitions int32) string {
+	t.Helper()
+	compact := "compact"
+	return createTopic(t, partitions, map[string]*string{"cleanup.policy": &compact})
+}
+
+func createTopic(t *testing.T, partitions int32, configs map[string]*string) string {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("needs docker")
 	}
@@ -97,7 +109,7 @@ func TopicN(t *testing.T, partitions int32) string {
 	}
 	defer client.Close()
 	name := fmt.Sprintf("t_%d", time.Now().UnixNano())
-	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), partitions, 1, nil, name); err != nil {
+	if _, err := kadm.NewClient(client).CreateTopic(t.Context(), partitions, 1, configs, name); err != nil {
 		t.Fatal(err)
 	}
 	return name
