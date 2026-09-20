@@ -46,7 +46,7 @@ public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOu
         a.heardMs = ctx.timerService().currentProcessingTime();
         if (a.apply(m)) {
             out.collect(new StateOut(m.icao, a.snap));
-            ctx.output(TRACES, Trace.of(a.snap, m.stationId, m.id, m.ts));
+            ctx.output(TRACES, Trace.of(a.snap, m.stationId, m.ts));
         }
         state.update(a);
     }

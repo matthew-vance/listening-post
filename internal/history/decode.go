@@ -11,7 +11,6 @@ import (
 // (flink/.../Trace.java). snake_case tags are the contract with that JSON; pointers mark optional fields.
 type traceRow struct {
 	EventStationID string     `json:"event_station_id"`
-	EventID        int64      `json:"event_id"`
 	EventTS        time.Time  `json:"event_ts"`
 	Icao           string     `json:"icao"`
 	Callsign       *string    `json:"callsign"`

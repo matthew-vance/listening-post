@@ -16,7 +16,6 @@ public class Decode implements FlatMapFunction<String, Decoded> {
     static Decoded decode(Event e) {
         Decoded d = Sbs.parse(e.raw());
         d.stationId = e.stationId();
-        d.id = e.id();
         d.ts = e.ts();
         d.receivedAt = e.receivedAt();
         return d;

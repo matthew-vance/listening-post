@@ -5,7 +5,6 @@ import java.time.Instant;
 /** The events.decoded wire format: the envelope minus the raw line, plus the parsed message. */
 public class Decoded extends Payload {
     public String stationId;
-    public Long id;
     public Instant ts;
     public Instant receivedAt;
     public String messageType;

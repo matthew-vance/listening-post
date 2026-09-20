@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/matthew-vance/listening-post/internal/pause"
 )
 
 // The bodies a station sends are pinned by internal/wire/testdata (station/test_golden.py produces them); here
@@ -77,7 +75,7 @@ func TestHeartbeatGolden(t *testing.T) {
 				saved = &hb
 				return nil
 			})
-			srv := newServer(slog.New(slog.DiscardHandler), fixedStations, capture, noopPublisher, pause.New())
+			srv := newServer(slog.New(slog.DiscardHandler), fixedStations, capture, noopPublisher)
 			wantStatus(t, post(srv, "/v1/stations/heartbeat", testToken, string(tc.Body)), http.StatusOK)
 			var body any
 			json.Unmarshal(tc.Body, &body)
@@ -99,7 +97,7 @@ func TestEventsGolden(t *testing.T) {
 		published = events
 		return nil
 	})
-	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture, pause.New())
+	srv := newServer(slog.New(slog.DiscardHandler), fixedStations, noopSaver, capture)
 	wantStatus(t, post(srv, "/v1/events", testToken, string(golden.Body)), http.StatusOK)
 	var body struct{ Events any }
 	json.Unmarshal(golden.Body, &body)

@@ -12,8 +12,16 @@ The SQLite file on a station that holds Events from the moment dump1090 emits th
 _Avoid_: db, store, queue, events table
 
 **Event**:
-One raw SBS-1 line as a station heard it, wrapped with the station id, the station's sequence number, and timestamps. The unit of everything upstream of decoding.
+One raw SBS-1 line as a station heard it, wrapped with the station id and when the station heard it; on the wire it also carries the station's sequence number. The unit of everything upstream of decoding.
 _Avoid_: message, line, record
+
+**Archive**:
+Every Event as its station heard it — station, time, raw line — kept forever, append-only. What every derivation can be backfilled from, and nothing more: no sequence numbers, no transport provenance.
+_Avoid_: data lake, raw store, history (that's the Traces)
+
+**Backfill**:
+Feeding the Archive through the derivations again so a newly added one gains the history it missed. Never touches the live picture; re-running it changes nothing.
+_Avoid_: replay (the mechanism, not the purpose), rebuild, repair
 
 **Decoded**:
 An Event with its SBS-1 line parsed into typed fields, keyed by the aircraft it concerns. Derived, never edited: the raw Event is the source of truth.
@@ -32,5 +40,5 @@ The record that retires an aircraft's Snapshot once it has been silent for the e
 _Avoid_: delete, null record
 
 **Trace**:
-One aircraft's changed Snapshots recorded over time, append-only, for drawing a flight path later. A new Trace lands only when the Snapshot's Payload actually changes, so it carries the aircraft's history without the sweep republishes. Each Trace is keyed by the raw Event that triggered it (station, its sequence number, and its time), so re-folding the same Events yields the same Traces.
+One aircraft's changed Snapshots recorded over time, append-only, for drawing a flight path later. A new Trace lands only when the Snapshot's Payload actually changes, so it carries the aircraft's history without the sweep republishes. Each Trace is keyed by the raw Event that triggered it (station and time), so re-folding the same Events yields the same Traces.
 _Avoid_: track (already the SBS heading field)

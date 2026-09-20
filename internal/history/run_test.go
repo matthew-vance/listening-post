@@ -20,7 +20,6 @@ func TestRunPersistsTraces(t *testing.T) {
 	var records []*kgo.Record
 	for i := range 10 {
 		row := sampleRow()
-		row.EventID = int64(i)
 		row.EventTS = row.EventTS.Add(time.Duration(i) * time.Second)
 		row.Icao = fmt.Sprintf("A%05d", i)
 		row.LastSeen = row.LastSeen.Add(time.Duration(i) * time.Second)

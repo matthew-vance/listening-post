@@ -11,8 +11,8 @@ up:
 archive-ls:
     find archive -name '*.parquet' | sort | tail -n 20
 
-# Rebuild Traces from the archive: pauses the stack, wipes the derived topics/table, replays the archive in
-# event-time order, and lets the pipeline re-fold. Destructive; see scripts/backfill.sh.
+# Feed the archive through the derivations again so a new one gains the history it missed. Runs a second
+# processor on the .replay topics; nothing live is touched and it's idempotent. See scripts/backfill.sh.
 backfill:
     ./scripts/backfill.sh
 

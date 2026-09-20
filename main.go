@@ -13,7 +13,6 @@ import (
 	"github.com/matthew-vance/listening-post/internal/archiver"
 	"github.com/matthew-vance/listening-post/internal/gateway"
 	"github.com/matthew-vance/listening-post/internal/history"
-	"github.com/matthew-vance/listening-post/internal/pause"
 )
 
 type service func(ctx context.Context, logger *slog.Logger) error
@@ -32,7 +31,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(ctx, logger, services(pause.New())); err != nil {
+	if err := run(ctx, logger, services()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -40,15 +39,13 @@ func main() {
 
 // services run together in one process, connected through Kafka rather than each other. Each Run documents its
 // own environment; the names are disjoint so they can share one. The processor is a Flink job (flink/), not here.
-// The gateway and archiver share one pause gate so the admin server can pause ingest and archiving in-process —
-// that's how the backfill stops them without a separate container.
-func services(gate *pause.Gate) map[string]service {
+func services() map[string]service {
 	return map[string]service{
 		"gateway": svc(gateway.LoadConfig, func(ctx context.Context, cfg gateway.Config, logger *slog.Logger) error {
-			return gateway.Run(ctx, cfg, logger, gate)
+			return gateway.Run(ctx, cfg, logger)
 		}),
 		"archiver": svc(archiver.LoadConfig, func(ctx context.Context, cfg archiver.Config, logger *slog.Logger) error {
-			return archiver.Run(ctx, cfg, logger, gate)
+			return archiver.Run(ctx, cfg, logger)
 		}),
 		"history": svc(history.LoadConfig, history.Run),
 	}

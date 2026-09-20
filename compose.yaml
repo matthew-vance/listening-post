@@ -33,8 +33,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # One Go binary running the gateway, archiver, and history writer in one container. The backfill pauses ingest
-  # and the archiver in-process via the admin endpoint rather than stopping containers.
+  # One Go binary running the gateway, archiver, and history writer in one container.
   server:
     build: .
     restart: unless-stopped
@@ -45,7 +44,7 @@ services:
     volumes:
       - ./archive:/archive # bind mount so DuckDB and notebooks read it from the host
     ports:
-      - "127.0.0.1:9091:9091" # admin port, host-side only: just backfill pauses ingest/archiver here
+      - "127.0.0.1:9091:9091" # admin port (health probes), host-side only
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,6 +111,13 @@ services:
         topic events.decoded
         topic aircraft.state $$compact
         topic aircraft.state_history
+        # the backfill's shadow set: a second processor reads and writes these; only history writers read them
+        # back. Transient, so a day's retention.
+        replay="--config retention.ms=86400000"
+        topic events.raw.replay $$replay
+        topic events.decoded.replay $$replay
+        topic aircraft.state.replay $$replay
+        topic aircraft.state_history.replay $$replay
 
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
@@ -132,6 +138,7 @@ services:
     build: &flink-build
       context: . # the repo root: the tests read internal/wire/testdata
       dockerfile: flink/Dockerfile
+    image: &flink-image listening-post-processor # one image for all four Flink services
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -148,9 +155,9 @@ services:
           $${latest:+--fromSavepoint "$$(dirname "$$latest")"}
     environment:
       KAFKA_BROKERS: kafka:9092
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager # the entrypoint turns this into jobmanager.rpc.address
       # managed memory is only used by the RocksDB backend; zero it so the heap backend gets that share
       FLINK_PROPERTIES: &flink-properties |
-        jobmanager.rpc.address: flink-jobmanager
         taskmanager.numberOfTaskSlots: 2
         jobmanager.memory.process.size: 1024m
         taskmanager.memory.process.size: 1024m
@@ -169,16 +176,55 @@ services:
 
   flink-taskmanager:
     build: *flink-build
+    image: *flink-image
     restart: unless-stopped
     command: taskmanager
     environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
       FLINK_PROPERTIES: *flink-properties
     volumes:
       - flink-checkpoints:/opt/flink/checkpoints
     depends_on:
       - flink-jobmanager
 
+  # The backfill's shadow processor: the same job over the ".replay" topics, up only while `just backfill` runs.
+  # Its jobmanager empties its checkpoint directory on start instead of resuming, so every backfill folds from
+  # empty state by construction, whatever the previous run left behind.
+  flink-jobmanager-replay:
+    build: *flink-build
+    image: *flink-image
+    profiles: [backfill]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        rm -rf /opt/flink/checkpoints/*
+        exec /docker-entrypoint.sh standalone-job --job-classname listeningpost.ProcessorJob
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      TOPIC_SUFFIX: .replay
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager-replay
+      FLINK_PROPERTIES: *flink-properties
+    volumes:
+      - flink-replay-checkpoints:/opt/flink/checkpoints
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+
+  flink-taskmanager-replay:
+    build: *flink-build
+    image: *flink-image
+    profiles: [backfill]
+    command: taskmanager
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager-replay
+      FLINK_PROPERTIES: *flink-properties
+    volumes:
+      - flink-replay-checkpoints:/opt/flink/checkpoints
+    depends_on:
+      - flink-jobmanager-replay
+
 volumes:
   postgres:
   kafka:
   flink-checkpoints:
+  flink-replay-checkpoints:

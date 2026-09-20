@@ -21,7 +21,9 @@ import java.util.Objects;
 /**
  * The processor: decodes events.raw onto events.decoded and folds that into aircraft.state. Decode is a stateless
  * flatMap; state is a keyed process function whose state Flink checkpoints. Topic names are pinned: auto-create
- * is off and compose's kafka-init declares exactly these.
+ * is off and compose's kafka-init declares exactly these. TOPIC_SUFFIX runs the same job over a parallel set of
+ * topics: the backfill replays the archive through a second instance on ".replay", so nothing here needs to
+ * know it is being replayed and the live instance's state is never touched.
  */
 public final class ProcessorJob {
     static final String RAW = "events.raw";
@@ -32,28 +34,32 @@ public final class ProcessorJob {
     public static void main(String[] args) throws Exception {
         String brokers = Objects.requireNonNull(System.getenv("KAFKA_BROKERS"), "KAFKA_BROKERS is not set");
         long expireMs = Long.parseLong(Objects.requireNonNullElse(System.getenv("EXPIRE_SECONDS"), "300")) * 1000;
+        String suffix = Objects.requireNonNullElse(System.getenv("TOPIC_SUFFIX"), "");
+        String rawTopic = RAW + suffix, decodedTopic = DECODED + suffix, stateTopic = STATE + suffix, historyTopic = STATE_HISTORY + suffix;
 
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         KafkaSource<String> source = KafkaSource.<String>builder()
                 .setBootstrapServers(brokers)
-                .setTopics(RAW)
-                .setGroupId("flink-processor")
+                .setTopics(rawTopic)
+                .setGroupId("flink-processor" + suffix)
                 .setStartingOffsets(OffsetsInitializer.committedOffsets(OffsetResetStrategy.EARLIEST))
                 .setValueOnlyDeserializer(new SimpleStringSchema())
                 .build();
 
-        DataStream<Decoded> decoded = env.fromSource(source, WatermarkStrategy.noWatermarks(), RAW)
+        DataStream<Decoded> decoded = env.fromSource(source, WatermarkStrategy.noWatermarks(), rawTopic)
                 .uid("raw-source")
-                .flatMap(new Decode()).name("decode").uid("decode");
-        decoded.sinkTo(sink(brokers, DECODED, Decoded::key, d -> d)).name(DECODED).uid("decoded-sink");
+                .flatMap(new Decode()).name("decode").uid("decode")
+                .keyBy(d -> d.stationId)
+                .process(new StationDedup()).name("dedup").uid("dedup");
+        decoded.sinkTo(sink(brokers, decodedTopic, Decoded::key, d -> d)).name(decodedTopic).uid("decoded-sink");
         var state = decoded.filter(d -> d.icao != null) // nothing to key state on
                 .uid("icao-filter")
                 .keyBy(d -> d.icao)
                 .process(new StateFunction(expireMs)).name("state").uid("state");
-        state.sinkTo(sink(brokers, STATE, StateOut::icao, StateOut::snapshot)).name(STATE).uid("state-sink");
+        state.sinkTo(sink(brokers, stateTopic, StateOut::icao, StateOut::snapshot)).name(stateTopic).uid("state-sink");
         state.getSideOutput(StateFunction.TRACES)
-                .sinkTo(sink(brokers, STATE_HISTORY, t -> t.icao, t -> t)).name(STATE_HISTORY).uid("state-history-sink");
-        env.execute("processor");
+                .sinkTo(sink(brokers, historyTopic, t -> t.icao, t -> t)).name(historyTopic).uid("state-history-sink");
+        env.execute("processor" + suffix);
     }
 
     /**

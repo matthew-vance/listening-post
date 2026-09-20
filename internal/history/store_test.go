@@ -21,7 +21,6 @@ func sampleRow() traceRow {
 	positionTs := lastSeen
 	return traceRow{
 		EventStationID: "s1",
-		EventID:        42,
 		EventTS:        lastSeen,
 		Icao:           "A22123",
 		Callsign:       &callsign,
@@ -59,7 +58,7 @@ func TestInsertDedupes(t *testing.T) {
 	}
 
 	var count int
-	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM aircraft_traces WHERE event_station_id = $1 AND event_id = $2", row.EventStationID, row.EventID).Scan(&count); err != nil {
+	if err := pool.QueryRow(t.Context(), "SELECT count(*) FROM aircraft_traces WHERE event_station_id = $1 AND event_ts = $2 AND icao = $3", row.EventStationID, row.EventTS, row.Icao).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -69,7 +68,6 @@ func TestInsertDedupes(t *testing.T) {
 	// every column round-trips
 	var (
 		gotStation, gotIcao, gotCallsign, gotSquawk string
-		gotEventID                                  int64
 		gotAltitude                                 int32
 		gotSpeed, gotTrack, gotLat                  float64
 		gotLon                                      float64
@@ -77,12 +75,12 @@ func TestInsertDedupes(t *testing.T) {
 		gotStations                                 []string
 		gotMessages                                 int64
 	)
-	if err := pool.QueryRow(t.Context(), `SELECT event_station_id, event_id, event_ts, icao, callsign, altitude, ground_speed, track, lat, lon, squawk, first_seen, last_seen, stations, messages
-		FROM aircraft_traces WHERE event_station_id = $1 AND event_id = $2`, row.EventStationID, row.EventID).Scan(&gotStation, &gotEventID, &gotEventTs, &gotIcao, &gotCallsign, &gotAltitude, &gotSpeed, &gotTrack, &gotLat, &gotLon, &gotSquawk, &gotFirstSeen, &gotLastSeen, &gotStations, &gotMessages); err != nil {
+	if err := pool.QueryRow(t.Context(), `SELECT event_station_id, event_ts, icao, callsign, altitude, ground_speed, track, lat, lon, squawk, first_seen, last_seen, stations, messages
+		FROM aircraft_traces WHERE event_station_id = $1 AND event_ts = $2 AND icao = $3`, row.EventStationID, row.EventTS, row.Icao).Scan(&gotStation, &gotEventTs, &gotIcao, &gotCallsign, &gotAltitude, &gotSpeed, &gotTrack, &gotLat, &gotLon, &gotSquawk, &gotFirstSeen, &gotLastSeen, &gotStations, &gotMessages); err != nil {
 		t.Fatal(err)
 	}
-	if gotStation != "s1" || gotEventID != 42 || !gotEventTs.Equal(row.EventTS) {
-		t.Fatalf("event_station_id=%q event_id=%d event_ts=%v", gotStation, gotEventID, gotEventTs)
+	if gotStation != "s1" || !gotEventTs.Equal(row.EventTS) {
+		t.Fatalf("event_station_id=%q event_ts=%v", gotStation, gotEventTs)
 	}
 	if gotIcao != "A22123" || gotCallsign != "AAL433" || gotAltitude != 8275 || gotSpeed != 117 || gotTrack != 240 || gotLat != 40.14684 || gotLon != -83.17065 || gotSquawk != "6653" {
 		t.Fatalf("row = %+v", map[string]any{"icao": gotIcao, "callsign": gotCallsign, "altitude": gotAltitude, "speed": gotSpeed, "track": gotTrack, "lat": gotLat, "lon": gotLon, "squawk": gotSquawk})

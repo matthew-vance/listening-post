@@ -14,11 +14,11 @@ func TestGroupAndWrite(t *testing.T) {
 	other := "8ee63520-fa04-424f-b05a-60065c207863"
 	day2 := t0.Add(24 * time.Hour)
 	rows := []Row{
-		{StationID: station, ID: 1, TS: t0, KafkaPartition: 1, KafkaOffset: 100},
-		{StationID: other, ID: 1, TS: t0, KafkaPartition: 2, KafkaOffset: 7},
-		{StationID: station, ID: 2, TS: t0.Add(time.Minute), KafkaPartition: 1, KafkaOffset: 101},
-		{StationID: station, ID: 3, TS: day2, KafkaPartition: 1, KafkaOffset: 102},
-		{StationID: other, ID: 2, TS: day2, KafkaPartition: 2, KafkaOffset: 8},
+		{StationID: station, TS: t0.Add(time.Minute), Raw: "MSG,2"},
+		{StationID: other, TS: t0, Raw: "MSG,9"},
+		{StationID: station, TS: t0, Raw: "MSG,1"},
+		{StationID: station, TS: day2, Raw: "MSG,3"},
+		{Raw: "not json"},
 	}
 
 	files, err := groupAndWrite(dir, rows)
@@ -27,20 +27,20 @@ func TestGroupAndWrite(t *testing.T) {
 	}
 	slices.Sort(files)
 	want := []string{
-		"dt=2026-09-14/station=" + station + "/p1-000000000100-000000000101.parquet",
-		"dt=2026-09-14/station=" + other + "/p2-000000000007-000000000007.parquet",
-		"dt=2026-09-15/station=" + station + "/p1-000000000102-000000000102.parquet",
-		"dt=2026-09-15/station=" + other + "/p2-000000000008-000000000008.parquet",
+		"dt=2026-09-14/20260914T150017.521000Z-20260914T150117.521000Z.parquet",
+		"dt=2026-09-15/20260915T150017.521000Z-20260915T150017.521000Z.parquet",
+		"dt=unknown/00010101T000000.000000Z-00010101T000000.000000Z.parquet",
 	}
 	if !slices.Equal(files, want) {
 		t.Fatalf("files = %v, want %v", files, want)
 	}
 
+	// a day's file holds every station, in event-time order
 	got, err := parquet.ReadFile[Row](filepath.Join(dir, want[0]))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
+	if len(got) != 3 || got[0].StationID != station || got[0].Raw != "MSG,1" || got[1].StationID != other || got[2].Raw != "MSG,2" {
 		t.Fatalf("first file rows = %+v", got)
 	}
 
@@ -48,7 +48,7 @@ func TestGroupAndWrite(t *testing.T) {
 	if _, err := groupAndWrite(dir, rows); err != nil {
 		t.Fatal(err)
 	}
-	if n := countFiles(t, dir); n != 4 {
-		t.Fatalf("after rewrite: %d files, want 4 (no .tmp leftovers, no duplicates)", n)
+	if n := countFiles(t, dir); n != 3 {
+		t.Fatalf("after rewrite: %d files, want 3 (no .tmp leftovers, no duplicates)", n)
 	}
 }

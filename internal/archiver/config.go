@@ -23,7 +23,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	// ponytail: flush thresholds are fixed; read them from env if a deployment ever needs to tune them.
-	cfg := Config{KafkaBrokers: brokers, KafkaRaw: wire.RawTopic, ArchiverGroup: "archiver", ArchiveDir: getenv("ARCHIVE_DIR"), FlushRecords: 10000, FlushSeconds: 300}
+	cfg := Config{KafkaBrokers: brokers, KafkaRaw: wire.RawTopic, ArchiverGroup: "archiver", ArchiveDir: getenv("ARCHIVE_DIR"), FlushRecords: 100000, FlushSeconds: 300}
 	if cfg.ArchiveDir == "" {
 		return Config{}, errors.New("ARCHIVE_DIR is not set")
 	}

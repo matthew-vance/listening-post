@@ -57,7 +57,7 @@ Both scripts batch their I/O deliberately. SD cards have limited write endurance
 
 The server side is one Go binary (`main.go`, `internal/`) running the gateway, archiver, and history writer as goroutines in one container via `docker compose` (`just up`), plus the processor as an [Apache Flink](https://flink.apache.org) job (`flink/`) in its own containers. They talk through Kafka, not each other, and if any service dies the whole binary exits and compose restarts it. Each reads the variables it needs: `KAFKA_BROKERS` everywhere, `DATABASE_URL` in the gateway and history writer, `ARCHIVE_DIR` in the archiver.
 
-The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes live on a separate admin port (`:9091`); `/readyz` also checks Postgres and Kafka. `POST /pause` and `/resume` on that port make the events endpoint answer 503 while the gateway stays up and pause the archiver's consumer in-process; the backfill uses them to stop ingest and archiving without taking the container down.
+The gateway (`internal/gateway/`) authenticates and validates incoming batches and heartbeats, stores heartbeats in Postgres, and publishes each event to Kafka. Its health probes live on a separate admin port (`:9091`); `/readyz` also checks Postgres and Kafka.
 
 Traefik is there to terminate TLS once there is a real hostname (add a `websecure` entrypoint and an ACME resolver to `compose.yaml`). **Do not point a Pi at a public gateway over plain HTTP** — the station token is the whole credential and would be sent in the clear.
 
@@ -114,17 +114,17 @@ The goose CLI is pinned in `go.mod` via the `tool` directive, so `go tool goose`
 
 ### Archiver
 
-`internal/archiver/` consumes `events.raw` and writes every record, untouched, to Hive-partitioned Parquet under `archive/` — the raw system of record everything downstream can be rebuilt from (the "sushi principle": store the raw fish).
+`internal/archiver/` consumes `events.raw` and writes every Event, as its station heard it, to date-partitioned Parquet under `archive/` — the Archive: the raw record every derivation can be backfilled from (the "sushi principle": store the raw fish), and nothing more.
 
 ```
-archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
+archive/dt=2026-09-14/20260914T150017.521000Z-20260914T155959.998000Z.parquet
 ```
 
-- `dt` is the event date (`ts`, UTC), so a station's late backlog lands in the right day. Files are named by Kafka partition and offset range, so re-processing after a crash regenerates the same files instead of duplicating rows. Offsets are committed only after a batch's files are renamed into place. A batch is 10,000 records or 5 minutes, whichever comes first.
-- Columns: `station_id, id, ts, raw, received_at, kafka_partition, kafka_offset, kafka_timestamp`. Undecodable records are kept under `dt=unknown/station=unknown` with their bytes in `raw`.
+- Columns: `station_id, ts, raw` — which station, when it heard the line, the line. No sequence numbers, no Kafka provenance: the archive is what was heard, not how it travelled. Undecodable records are kept under `dt=unknown/` with their bytes in `raw`.
+- `dt` is the event date (`ts`, UTC), so a station's late backlog lands in the right day; a file holds every station. Files are named by the event-time range they hold and compressed with zstd. Offsets are committed only after a batch's files are renamed into place, so a crash re-reads and rewrites rather than loses; the files it rewrites may overlap, and a duplicate delivery from a station is archived twice, so readers dedupe on the row (`SELECT DISTINCT`, as `cmd/backfill` does). A batch is 100,000 records or 5 minutes, whichever comes first.
 - Query it in place:
   ```sql
-  SELECT dt, station, count(*) FROM read_parquet('archive/**/*.parquet', hive_partitioning = true) GROUP BY ALL;
+  SELECT dt, station_id, count(DISTINCT (station_id, ts, raw)) FROM read_parquet('archive/**/*.parquet', hive_partitioning = true) GROUP BY ALL;
   ```
 
 | Variable        | Default      | Purpose                                            |
@@ -136,7 +136,7 @@ archive/dt=2026-09-14/station=3ae884ac-…/p1-000000000475-000000010474.parquet
 
 ### History
 
-`internal/history/` consumes `aircraft.state_history` and inserts every Trace into the `aircraft_traces` hypertable in TimescaleDB, so flight paths can be drawn later with a plain SQL range scan. It commits Kafka offsets only after a batch's rows are in the table; each Trace carries its triggering Event's identity, which rides a `UNIQUE (event_station_id, event_id, event_ts, last_seen)` constraint, so an at-least-once re-read after a crash — or a re-fold of the same archive — is a no-op rather than a duplicate row. A batch is 1,000 rows or 5 seconds, whichever comes first.
+`internal/history/` consumes `aircraft.state_history` and inserts every Trace into the `aircraft_traces` hypertable in TimescaleDB, so flight paths can be drawn later with a plain SQL range scan. It commits Kafka offsets only after a batch's rows are in the table; each Trace carries its triggering Event's station and time, which with the aircraft ride a `UNIQUE (event_station_id, event_ts, icao, last_seen)` constraint, so an at-least-once re-read after a crash — or a backfill's re-fold of the same archive — is a no-op rather than a duplicate row. It reads `aircraft.state_history.replay` alongside the live topic for exactly that reason. A batch is 1,000 rows or 5 seconds, whichever comes first.
 
 ```sql
 SELECT lat, lon, position_ts FROM aircraft_traces
@@ -153,13 +153,13 @@ Chunks compress after 7 days (`add_compression_policy`); there is no retention p
 
 ### Backfill
 
-`just backfill` rebuilds the Traces (and the live picture) from the archive. It pauses ingest and the archiver via the admin endpoint (the gateway keeps serving heartbeats but answers 503 to `POST /v1/events`, so stations buffer), stops the processor, truncates and replays `events.raw` (truncated, not deleted, so the gateway's producer keeps working), truncates `aircraft_traces`, clears the Flink checkpoint, then replays the archive in event-time order (`cmd/backfill`, a Go program that reads `archive/*.parquet` and sorts by `ts`). The processor re-folds the whole history from scratch; the history writer — still running — persists the new Traces; the archiver resumes past the replay. The archive itself is never touched, and the natural Trace key makes the rebuild re-runnable. It's a destructive, one-shot operation — `scripts/backfill.sh` refuses to run if `archive/` is missing or empty.
+`just backfill` feeds the archive through the derivations again so a newly added one gains the history it missed. Nothing live is touched: `cmd/backfill` replays `archive/` onto `events.raw.replay` in event-time order, a second copy of the processor (compose profile `backfill`, `TOPIC_SUFFIX=.replay`) folds it from empty state into the `.replay` twins of its output topics, and only writers that persist append-only history read those back — the history writer does, the map and the archiver don't. The script waits for both lags to drain, then removes the shadow processor; its jobmanager empties its own checkpoints on start, so every run folds from empty state. It is idempotent: the Trace's natural key makes rows persisted before no-ops, so run it after adding a derivation, or again if a run was interrupted. The window between a derivation going live and its backfill can hold rows from both folds; they converge once the aircraft in the sky at the time expire. See `docs/adr/0002-backfill-through-a-shadow-pipeline.md` for why not the live topic.
 
 ### Processor
 
-`flink/` is the one place SBS-1 is parsed: a Flink DataStream job (see `docs/adr/0001-processor-as-flink-job.md` for why not Go). A stateless `flatMap` reads `events.raw` and writes one typed JSON record per line to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data.
+`flink/` is the one place SBS-1 is parsed: a Flink DataStream job (see `docs/adr/0001-processor-as-flink-job.md` for why not Go). A stateless `flatMap` reads `events.raw`, a per-station dedup drops re-delivered batches, and one typed JSON record per line goes to `events.decoded`, keyed by ICAO (station id if the line has none) so an aircraft's messages stay ordered within a partition. Lines that don't parse are logged and skipped — the archive has them, and `events.decoded` is derived data. `TOPIC_SUFFIX` runs the same job over a parallel set of topics; the backfill uses it.
 
-The record is the raw envelope (`station_id`, `id`, `ts`, `received_at`) plus the [SBS-1 fields](http://woodair.net/sbs/article/barebones42_socket_data.htm), present only when the line carried them:
+The record is the raw envelope (`station_id`, `ts`, `received_at`) plus the [SBS-1 fields](http://woodair.net/sbs/article/barebones42_socket_data.htm), present only when the line carried them:
 
 | key | type | SBS field |
 |---|---|---|
@@ -199,7 +199,7 @@ The job runs in application mode: `flink-jobmanager` runs the one job baked into
 
 #### Traces
 
-Every time the fold *actually changes* a snapshot, it also writes a **Trace** to `aircraft.state_history` — the same snapshot stamped with the identity of the raw Event that triggered it (`event_station_id`, `event_id`, `event_ts`), so a re-fold of the same events produces the same traces. The sweep's heard-but-unchanged republish and tombstones stay on `aircraft.state` only, so the history topic carries just the aircraft's real changes, in order, keyed by ICAO. It is append-only (not compacted): it's the record flight paths are drawn from, and `aircraft.state`'s compaction is what makes it history-keeping by itself impossible.
+Every time the fold *actually changes* a snapshot, it also writes a **Trace** to `aircraft.state_history` — the same snapshot stamped with the station and time of the raw Event that triggered it (`event_station_id`, `event_ts`), so a re-fold of the same events produces the same traces. The sweep's heard-but-unchanged republish and tombstones stay on `aircraft.state` only, so the history topic carries just the aircraft's real changes, in order, keyed by ICAO. It is append-only (not compacted): it's the record flight paths are drawn from, and `aircraft.state`'s compaction is what makes it history-keeping by itself impossible.
 
 #### Map
 
@@ -209,7 +209,7 @@ Every time the fold *actually changes* a snapshot, it also writes a **Trace** to
 
 A single-node Apache Kafka broker (KRaft, no ZooKeeper) runs as a compose service. Topics are declared by the one-shot `kafka-init` service, never auto-created, and their names are constants in the code that produces them (`internal/wire/` for the gateway, `ProcessorJob.java` for the processor): `events.raw` (keyed by station, archived), `events.decoded` (keyed by ICAO), `aircraft.state` (keyed by ICAO, compacted), and `aircraft.state_history` (keyed by ICAO, append-only), 3 partitions each, default 7-day retention — `events.raw`'s can shrink now that the archive is the system of record.
 
-The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`; the processor's `Decoded`, `Snapshot`, and `Trace` live in `flink/`). `internal/wire/testdata/` holds golden fixtures: raw line → decoded record, message sequence → snapshots, and a changed snapshot → trace (run by the processor's tests), and the heartbeat and events request bodies (produced by the station's tests, accepted by the gateway's), so every cross-language contract is checked against the same data rather than kept in step by hand. See `CONTEXT.md` for the vocabulary. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates (they carry distinct offsets); the state fold and the trace writer tolerate them.
+The gateway publishes one record per event to `events.raw`, keyed by station UUID so a station's events stay ordered within a partition. The value is JSON: `{"station_id","id","ts","raw","received_at"}` (`wire.Event` in `internal/wire/`; the processor's `Decoded`, `Snapshot`, and `Trace` live in `flink/`). `internal/wire/testdata/` holds golden fixtures: raw line → decoded record, message sequence → snapshots, and a changed snapshot → trace (run by the processor's tests), and the heartbeat and events request bodies (produced by the station's tests, accepted by the gateway's), so every cross-language contract is checked against the same data rather than kept in step by hand. See `CONTEXT.md` for the vocabulary. It answers a station's `POST /v1/events` with 200 only after the broker has acknowledged every record, and the station deletes its buffered rows only on that 200 — so delivery is at-least-once: a batch whose 200 never reached the station is re-sent. The archive keeps duplicates and readers dedupe on the row; the processor drops them before the fold (a station's events are in order with monotonic `ts`, so anything at or before the newest seen from that station is a repeat), and the trace writer's natural key would ignore them anyway.
 
 - `just kafka-topics` lists topics; [Kafbat UI](https://github.com/kafbat/kafka-ui) is at http://localhost:8081 (localhost-only, no auth).
 - Inside the compose network the broker is `kafka:9092`; from the host it's `localhost:9094`.

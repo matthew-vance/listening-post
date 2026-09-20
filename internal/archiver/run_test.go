@@ -12,10 +12,8 @@ import (
 	"time"
 
 	"github.com/matthew-vance/listening-post/internal/kafkatest"
-	"github.com/matthew-vance/listening-post/internal/pause"
 	"github.com/matthew-vance/listening-post/internal/wire"
 	"github.com/parquet-go/parquet-go"
-	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -48,7 +46,7 @@ func TestRunArchivesTopic(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), pause.New()) }()
+	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler)) }()
 	var rows []Row
 	for deadline := time.Now().Add(20 * time.Second); len(rows) < 25 && time.Now().Before(deadline); {
 		time.Sleep(200 * time.Millisecond)
@@ -62,16 +60,16 @@ func TestRunArchivesTopic(t *testing.T) {
 	if len(rows) != 25 {
 		t.Fatalf("archived %d rows, want 25", len(rows))
 	}
-	// partitions reflect event date and station; offsets are all present exactly once
-	seen := map[int64]bool{}
+	// every event is present exactly once, under its event date
+	seen := map[string]bool{}
 	for _, r := range rows {
-		seen[r.KafkaOffset] = true
+		seen[r.StationID+r.Raw] = true
 	}
 	if len(seen) != 25 {
-		t.Fatalf("distinct offsets = %d, want 25 (duplicates or gaps)", len(seen))
+		t.Fatalf("distinct events = %d, want 25 (duplicates or gaps)", len(seen))
 	}
-	if n := countFiles(t, filepath.Join(dir, "dt=2026-09-14", "station="+other)); n == 0 {
-		t.Fatal("no files for the second station")
+	if n := countFiles(t, filepath.Join(dir, "dt=2026-09-14")); n == 0 {
+		t.Fatal("no files under the event date")
 	}
 
 	// offsets were committed: a second run into a fresh dir archives nothing
@@ -79,28 +77,12 @@ func TestRunArchivesTopic(t *testing.T) {
 	cfg.ArchiveDir = fresh
 	ctx, cancel = context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if err := Run(ctx, cfg, slog.New(slog.DiscardHandler), pause.New()); err != nil {
+	if err := Run(ctx, cfg, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
 	if n := countFiles(t, fresh); n != 0 {
 		t.Fatalf("second run wrote %d files, want 0 (offsets not committed?)", n)
 	}
-}
-
-func waitForMember(t *testing.T, group string) {
-	t.Helper()
-	client, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	adm := kadm.NewClient(client)
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if g, err := adm.DescribeGroups(t.Context(), group); err == nil && len(g[group].Members) > 0 {
-			return
-		}
-	}
-	t.Fatalf("group %s never got a member", group)
 }
 
 func readArchive(t *testing.T, dir string) []Row {
@@ -130,77 +112,4 @@ func countFiles(t *testing.T, dir string) int {
 		return nil
 	})
 	return n
-}
-
-func TestRunDrainsOnPause(t *testing.T) {
-	topic := kafkatest.Topic(t)
-	var records []*kgo.Record
-	for i := range 25 {
-		v, _ := json.Marshal(wire.Event{StationID: station, ID: int64(i), TS: t0, Raw: fmt.Sprintf("MSG,%d", i), ReceivedAt: t0})
-		records = append(records, &kgo.Record{Topic: topic, Key: []byte(station), Value: v})
-	}
-	kafkatest.Produce(t, records...)
-
-	dir := t.TempDir()
-	// flush thresholds the test never reaches: only the pause can put the rows on disk
-	cfg := Config{KafkaBrokers: kafkatest.Brokers, KafkaRaw: topic, ArchiverGroup: "g_" + topic, ArchiveDir: dir, FlushRecords: 1000, FlushSeconds: 300}
-
-	gate := pause.New()
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), gate) }()
-	waitForMember(t, cfg.ArchiverGroup) // pause a running session, as the backfill does, not one that hasn't joined yet
-	gate.Pause()
-
-	var rows []Row
-	for deadline := time.Now().Add(20 * time.Second); len(rows) < 25 && time.Now().Before(deadline); {
-		time.Sleep(200 * time.Millisecond)
-		rows = readArchive(t, dir)
-	}
-	if len(rows) != 25 {
-		t.Fatalf("archived %d rows after pause, want 25 (the topic must be drained before the archiver leaves)", len(rows))
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("Run returned %v while paused, want it to wait for the resume", err)
-	default:
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("run: %v", err)
-	}
-}
-
-func TestRunLeavesOnPauseWhenAlreadyCaughtUp(t *testing.T) {
-	topic := kafkatest.Topic(t)
-	v, _ := json.Marshal(wire.Event{StationID: station, ID: 1, TS: t0, Raw: "MSG,1", ReceivedAt: t0})
-	kafkatest.Produce(t, &kgo.Record{Topic: topic, Key: []byte(station), Value: v})
-
-	dir := t.TempDir()
-	cfg := Config{KafkaBrokers: kafkatest.Brokers, KafkaRaw: topic, ArchiverGroup: "g_" + topic, ArchiveDir: dir, FlushRecords: 1, FlushSeconds: 1}
-
-	gate := pause.New()
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- Run(ctx, cfg, slog.New(slog.DiscardHandler), gate) }()
-	// the record is flushed and committed before the pause: the partition is caught up with nothing pending
-	for deadline := time.Now().Add(20 * time.Second); countFiles(t, dir) == 0 && time.Now().Before(deadline); {
-		time.Sleep(200 * time.Millisecond)
-	}
-	gate.Pause()
-
-	// the drain must see the committed position as caught up and leave; a stuck drain keeps the member
-	client, err := kgo.NewClient(kgo.SeedBrokers(kafkatest.Brokers...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer client.Close()
-	adm := kadm.NewClient(client)
-	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
-		if g, err := adm.DescribeGroups(t.Context(), cfg.ArchiverGroup); err == nil && len(g[cfg.ArchiverGroup].Members) == 0 {
-			return
-		}
-	}
-	t.Fatal("archiver never left the group after a pause on an already caught-up topic")
 }

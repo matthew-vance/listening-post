@@ -19,6 +19,11 @@ import (
 // in flink/.../ProcessorJob.java).
 const RawTopic = "events.raw" // one record per SBS-1 line, keyed by station
 
+// ReplaySuffix names the shadow twin of a topic: the backfill replays the archive onto RawTopic+ReplaySuffix, a
+// second processor (TOPIC_SUFFIX in flink/) writes its outputs to their twins, and only history writers read
+// those back.
+const ReplaySuffix = ".replay"
+
 // Brokers reads KAFKA_BROKERS, a comma-separated bootstrap list, from getenv.
 func Brokers(getenv func(string) string) ([]string, error) {
 	v := getenv("KAFKA_BROKERS")

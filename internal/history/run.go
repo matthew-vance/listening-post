@@ -27,7 +27,8 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger) error {
 
 	client, err := wire.OpenKafka(ctx, cfg.KafkaBrokers,
 		kgo.ConsumerGroup(cfg.Group),
-		kgo.ConsumeTopics(cfg.KafkaTopic),
+		// the backfill's shadow processor writes the same Traces to the .replay topic; the natural key dedupes
+		kgo.ConsumeTopics(cfg.KafkaTopic, cfg.KafkaTopic+wire.ReplaySuffix),
 		kgo.DisableAutoCommit(), // offsets advance only once rows are committed
 	)
 	if err != nil {
