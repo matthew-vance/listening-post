@@ -27,7 +27,9 @@ flowchart LR
         gateway -- "events.raw" --> kafka[(kafka)]
         kafka --> archiver --> archive[(parquet)]
         kafka -- "events.raw" --> processor[processor, Flink] -- "events.decoded, aircraft.state, aircraft.state_history" --> kafka
-        kafka -- "aircraft.state_history" --> history --> postgres
+        kafka -- "aircraft.state_history (+ .replay)" --> history --> postgres
+        archive -. "just backfill" .-> backfill[cmd/backfill] -. "events.raw.replay" .-> kafka
+        kafka -. "events.raw.replay" .-> shadow[processor, Flink: replay instance] -. "*.replay" .-> kafka
     end
     publish -- "POST /v1/events (bearer token)" --> traefik
     heartbeat -- "POST /v1/stations/heartbeat" --> traefik
