@@ -51,7 +51,7 @@ ExecStart=/usr/bin/python3 -m station
 Restart=always
 ```
 
-Resilience is three layers, each for a distinct failure mode: the loops retry *inside* (ingest reconnects, publish re-sends after a failed POST), so transient network and SQLite errors never exit them; the supervisor restarts a loop that exits anyway (an uncaught exception); and systemd restarts the supervisor itself if that dies. The supervisor's restart is therefore a rare safety net, not the primary retry path.
+Resilience is three layers, each for a distinct failure mode: the loops retry *inside* (ingest reconnects, publish re-sends after a failed POST), so transient network errors never exit them; the supervisor restarts a loop that exits anyway (an uncaught exception, e.g. a SQLite error); and systemd restarts the supervisor itself if that dies. The supervisor's restart is therefore a rare safety net, not the primary retry path.
 
 Both scripts batch their I/O deliberately. SD cards have limited write endurance, and dump1090 can produce hundreds of lines per second; committing each one to SQLite individually would burn through a card in months. Ingest writes one transaction per `INGEST_BATCH_SIZE` lines / `FLUSH_SECONDS`, and publish sends `PUBLISH_BATCH_SIZE` events per request, so both disk writes and HTTP round-trips stay low.
 
@@ -146,14 +146,14 @@ ORDER BY position_ts;
 
 Chunks compress after 7 days (`add_compression_policy`); there is no retention policy yet — history is kept forever until one is wanted.
 
-### Backfill
-
-`just backfill` rebuilds the Traces (and the live picture) from the archive. It pauses ingest and the archiver via the admin endpoint (the gateway keeps serving heartbeats but answers 503 to `POST /v1/events`, so stations buffer), stops the processor, truncates and replays `events.raw` (truncated, not deleted, so the gateway's producer keeps working), truncates `aircraft_traces`, clears the Flink checkpoint, then replays the archive in event-time order (`cmd/backfill`, a Go program that reads `archive/*.parquet` and sorts by `ts`). The processor re-folds the whole history from scratch; the history writer — still running — persists the new Traces; the archiver resumes past the replay. The archive itself is never touched, and the natural Trace key makes the rebuild re-runnable. It's a destructive, one-shot operation — `scripts/backfill.sh` refuses to run if `archive/` is missing or empty.
-
 | Variable        | Default      | Purpose                                          |
 |-----------------|--------------|--------------------------------------------------|
 | `KAFKA_BROKERS` | *(required)* | Comma-separated bootstrap brokers                |
 | `DATABASE_URL`  | *(required)* | TimescaleDB connection URL (shared with gateway) |
+
+### Backfill
+
+`just backfill` rebuilds the Traces (and the live picture) from the archive. It pauses ingest and the archiver via the admin endpoint (the gateway keeps serving heartbeats but answers 503 to `POST /v1/events`, so stations buffer), stops the processor, truncates and replays `events.raw` (truncated, not deleted, so the gateway's producer keeps working), truncates `aircraft_traces`, clears the Flink checkpoint, then replays the archive in event-time order (`cmd/backfill`, a Go program that reads `archive/*.parquet` and sorts by `ts`). The processor re-folds the whole history from scratch; the history writer — still running — persists the new Traces; the archiver resumes past the replay. The archive itself is never touched, and the natural Trace key makes the rebuild re-runnable. It's a destructive, one-shot operation — `scripts/backfill.sh` refuses to run if `archive/` is missing or empty.
 
 ### Processor
 
