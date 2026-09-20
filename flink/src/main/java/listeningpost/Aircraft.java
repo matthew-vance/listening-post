@@ -16,6 +16,7 @@ public class Aircraft {
     public Snapshot snap = new Snapshot();
     public long[] fieldTs = new long[POSITION_TS + 1]; // epoch millis; 0 = never set
     public boolean dirty; // heard from since its last snapshot went out
+    public long heardMs; // processing time the fold last applied a message; expiry counts silence from here
 
     public static Aircraft create(String icao) {
         Aircraft a = new Aircraft();
@@ -77,8 +78,12 @@ public class Aircraft {
         return true;
     }
 
-    /** Silent for longer than expireMs as of now (processing time against event time). */
+    /**
+     * Silent for longer than expireMs of processing time. Not measured against the event-time lastSeen: a replayed
+     * archive or a station's drained backlog carries old timestamps while the aircraft is still being heard, and
+     * expiring it mid-fold would fragment its trace.
+     */
     public boolean expired(long nowMs, long expireMs) {
-        return nowMs - snap.lastSeen.toEpochMilli() > expireMs;
+        return nowMs - heardMs > expireMs;
     }
 }

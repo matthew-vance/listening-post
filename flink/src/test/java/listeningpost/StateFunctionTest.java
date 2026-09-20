@@ -187,4 +187,23 @@ class StateFunctionTest {
         send(msg("s1", BASE.plusSeconds(1000), POSITION));
         assertEquals(1, out().get(0).snapshot().messages);
     }
+
+    @Test
+    void expiryIsSilenceInProcessingTime() throws Exception {
+        // a replayed (or backlogged) event is days older than the clock; the aircraft is still being heard from
+        send(msg("s1", BASE.minus(Duration.ofDays(2)), POSITION));
+        out();
+        advance(Duration.ofMillis(EXPIRE_MS - StateFunction.SWEEP_MS));
+        assertEquals(0, out().size(), "old event time alone must not expire an aircraft the fold just heard");
+
+        send(msg("s1", BASE.minus(Duration.ofDays(2)).plusSeconds(1), VELOCITY));
+        List<StateOut> folded = out();
+        assertEquals(1, folded.size(), "the second event folds into the same aircraft");
+        assertEquals(2, folded.get(0).snapshot().messages, "not re-created as a fresh aircraft");
+
+        advance(Duration.ofMillis(EXPIRE_MS + 2 * StateFunction.SWEEP_MS));
+        List<StateOut> out = out();
+        assertEquals(1, out.size());
+        assertNull(out.get(0).snapshot(), "silent for expireMs of processing time: tombstoned");
+    }
 }

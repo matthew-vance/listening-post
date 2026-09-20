@@ -43,6 +43,7 @@ public class StateFunction extends KeyedProcessFunction<String, Decoded, StateOu
             // one timer chain per live aircraft; onTimer keeps it going until the aircraft expires
             ctx.timerService().registerProcessingTimeTimer(ctx.timerService().currentProcessingTime() + SWEEP_MS);
         }
+        a.heardMs = ctx.timerService().currentProcessingTime();
         if (a.apply(m)) {
             out.collect(new StateOut(m.icao, a.snap));
             ctx.output(TRACES, Trace.of(a.snap, m.stationId, m.id, m.ts));
